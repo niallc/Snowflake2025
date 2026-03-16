@@ -105,6 +105,10 @@ class PipelineConfig:
     resume_mode: str = "next_epoch"
     target_end_epoch: Optional[int] = None
     training_resume_checkpoint: Optional[str] = None
+    warm_start_checkpoint: Optional[str] = None
+    warm_start_exclude_prefixes: List[str] = field(
+        default_factory=lambda: ["policy_head."]
+    )
     train_from_scratch: bool = False
     allow_missing_stream_sidecar_fallback: bool = False
     internal_training_chunk_run: bool = False
@@ -147,16 +151,32 @@ class PipelineConfig:
             self.model_filename = None
             self.model_full_path = None
 
-        if self.train_from_scratch and self.training_resume_checkpoint is not None:
-            raise ValueError(
-                "Cannot set both training_resume_checkpoint and train_from_scratch."
+        init_mode_count = sum(
+            bool(value)
+            for value in (
+                self.train_from_scratch,
+                self.training_resume_checkpoint is not None,
+                self.warm_start_checkpoint is not None,
             )
+        )
+        if init_mode_count > 1:
+            raise ValueError(
+                "training_resume_checkpoint, warm_start_checkpoint, and "
+                "train_from_scratch are mutually exclusive."
+            )
+        self.training_warm_start_from = (
+            os.path.expanduser(self.warm_start_checkpoint)
+            if self.warm_start_checkpoint is not None
+            else None
+        )
         if self.train_from_scratch:
             self.training_resume_from = None
         elif self.training_resume_checkpoint is not None:
             self.training_resume_from = os.path.expanduser(
                 self.training_resume_checkpoint
             )
+        elif self.training_warm_start_from is not None:
+            self.training_resume_from = None
         elif self.model_full_path is not None:
             self.training_resume_from = self.model_full_path
         else:
@@ -185,9 +205,15 @@ class PipelineConfig:
                 )
             if not os.path.exists(self.model_full_path):
                 raise FileNotFoundError(f"Model not found: {self.model_full_path}")
-        if self.run_training and self.training_resume_from is None and not self.train_from_scratch:
+        if (
+            self.run_training
+            and self.training_resume_from is None
+            and self.training_warm_start_from is None
+            and not self.train_from_scratch
+        ):
             raise ValueError(
                 "Training requires either --train-from-scratch, "
+                "--warm-start-checkpoint, "
                 "--training-resume-checkpoint, or "
                 "--model-path/--model-epoch/--model-mini."
             )
@@ -198,6 +224,14 @@ class PipelineConfig:
         ):
             raise FileNotFoundError(
                 f"Training resume checkpoint not found: {self.training_resume_from}"
+            )
+        if (
+            self.run_training
+            and self.training_warm_start_from is not None
+            and not os.path.exists(self.training_warm_start_from)
+        ):
+            raise FileNotFoundError(
+                f"Training warm-start checkpoint not found: {self.training_warm_start_from}"
             )
         
         # Validate data directories exist
@@ -818,6 +852,8 @@ class TrainingStep:
             enable_augmentation=True,
             mini_epoch_samples=self.MINI_EPOCH_SAMPLES,
             resume_from=resume_from,
+            warm_start_from=self.config.training_warm_start_from,
+            warm_start_excluded_prefixes=self.config.warm_start_exclude_prefixes,
             shard_ranges=all_shard_ranges,
             shutdown_handler=shutdown_handler,
             run_timestamp=self.config.run_timestamp,
@@ -968,9 +1004,14 @@ class TrainingStep:
         first_child_resume_mode = self.config.resume_mode
         if self.config.training_resume_from is None:
             target_end_epoch = self._resolve_chunked_target_end_epoch(None)
+            init_label = (
+                f"warm start from {self.config.training_warm_start_from}"
+                if self.config.training_warm_start_from is not None
+                else "fresh initialization"
+            )
             self.logger.info(
                 f"Chunked training restart mode enabled (every {self.config.restart_every_mini_epochs} mini-epochs) "
-                f"from fresh initialization. Target end epoch: {target_end_epoch}"
+                f"from {init_label}. Target end epoch: {target_end_epoch}"
             )
             initial_result = self._run_training_once(
                 experiments=experiments,
@@ -1100,7 +1141,14 @@ class TrainingStep:
                 ),
             )
             if self.config.training_resume_from is None:
-                self.logger.info("Restart chunk summary: fresh model initialization")
+                if self.config.training_warm_start_from is None:
+                    self.logger.info("Restart chunk summary: fresh model initialization")
+                else:
+                    self.logger.info(
+                        "Restart chunk summary: warm start from %s (excluding prefixes %s)",
+                        self.config.training_warm_start_from,
+                        self.config.warm_start_exclude_prefixes,
+                    )
             else:
                 self.logger.info(
                     f"Restart chunk summary: resume checkpoint {self.config.training_resume_from}"
@@ -1112,7 +1160,14 @@ class TrainingStep:
             self.logger.info(f"Results directory: {results_dir}")
             self.logger.info(f"Max samples: {self.config.max_samples}")
             if self.config.training_resume_from is None:
-                self.logger.info("Resume from: fresh model initialization")
+                if self.config.training_warm_start_from is None:
+                    self.logger.info("Resume from: fresh model initialization")
+                else:
+                    self.logger.info(
+                        "Resume from: warm start checkpoint %s (excluding prefixes %s)",
+                        self.config.training_warm_start_from,
+                        self.config.warm_start_exclude_prefixes,
+                    )
             else:
                 self.logger.info(f"Resume from: {self.config.training_resume_from}")
 
@@ -1187,7 +1242,14 @@ class TrainingPipeline:
             self.config.model_full_path if self.config.model_full_path is not None else "not specified",
         )
         if self.config.training_resume_from is None:
-            self.logger.info("Training init: fresh model initialization")
+            if self.config.training_warm_start_from is None:
+                self.logger.info("Training init: fresh model initialization")
+            else:
+                self.logger.info(
+                    "Training init: warm start from %s (excluding prefixes %s)",
+                    self.config.training_warm_start_from,
+                    self.config.warm_start_exclude_prefixes,
+                )
         else:
             self.logger.info(f"Training init checkpoint: {self.config.training_resume_from}")
         if self.config.internal_training_chunk_run:
@@ -1606,11 +1668,29 @@ Examples:
         ),
     )
     training_init_group.add_argument(
+        "--warm-start-checkpoint",
+        type=str,
+        help=(
+            "Optional checkpoint path for fresh-lineage warm start. "
+            "Loads shared weights into the current architecture while keeping a fresh optimizer state."
+        ),
+    )
+    training_init_group.add_argument(
         "--train-from-scratch",
         action="store_true",
         help=(
             "Start training from a fresh model initialization while still allowing "
             "self-play to use the selected incumbent checkpoint."
+        ),
+    )
+    parser.add_argument(
+        "--warm-start-exclude-prefixes",
+        type=str,
+        nargs="*",
+        default=["policy_head."],
+        help=(
+            "Module prefixes to exclude from warm-start loading. "
+            "Default: policy_head."
         ),
     )
     
@@ -1691,6 +1771,7 @@ def main():
             not args.no_training
             and not args.train_from_scratch
             and args.training_resume_checkpoint is None
+            and args.warm_start_checkpoint is None
         )
         requires_model_reference = (
             requires_selfplay_model or requires_training_reference
@@ -1707,8 +1788,6 @@ def main():
                 args.model_path = get_model_dir("best")
                 
                 # Extract epoch and mini from the filename
-                import os
-                import re
                 filename = os.path.basename(model_path)
                 # Expected format: epoch2_mini201.pt.gz
                 # Use regex to extract epoch and mini numbers
@@ -1746,7 +1825,11 @@ def main():
                 raise ValueError("--model-mini is required when using --model-path")
 
         training_resume_source = None
-        if not args.no_training and not args.train_from_scratch:
+        if (
+            not args.no_training
+            and not args.train_from_scratch
+            and args.warm_start_checkpoint is None
+        ):
             if args.training_resume_checkpoint is not None:
                 training_resume_source = os.path.expanduser(args.training_resume_checkpoint)
             elif args.model_path is not None:
@@ -1754,6 +1837,11 @@ def main():
                     args.model_path,
                     f"epoch{args.model_epoch}_mini{args.model_mini}.pt.gz",
                 )
+        architecture_reference_source = training_resume_source
+        if not args.no_training and args.warm_start_checkpoint is not None:
+            architecture_reference_source = os.path.expanduser(
+                args.warm_start_checkpoint
+            )
 
         # Collect hyperparameter overrides
         hyperparameter_overrides = {}
@@ -1764,7 +1852,7 @@ def main():
         if args.trunk_channels is not None:
             hyperparameter_overrides["trunk_channels"] = [args.trunk_channels]
 
-        if training_resume_source is not None:
+        if architecture_reference_source is not None:
             missing_architecture_keys = [
                 key
                 for key in ("model_type", "num_blocks", "trunk_channels")
@@ -1772,7 +1860,7 @@ def main():
             ]
             if missing_architecture_keys:
                 checkpoint_spec = resolve_model_spec_for_checkpoint_path(
-                    training_resume_source,
+                    architecture_reference_source,
                     map_location="cpu",
                 )
                 inferred_architecture = {
@@ -1784,8 +1872,8 @@ def main():
                     hyperparameter_overrides[key] = [inferred_architecture[key]]
                 logger.info(
                     "Inferred missing training architecture overrides from "
-                    "resume checkpoint %s: %s",
-                    training_resume_source,
+                    "checkpoint reference %s: %s",
+                    architecture_reference_source,
                     {
                         key: inferred_architecture[key]
                         for key in missing_architecture_keys
@@ -1860,6 +1948,8 @@ def main():
             results_dir=args.results_dir,
             restart_every_mini_epochs=args.restart_every_mini_epochs,
             training_resume_checkpoint=args.training_resume_checkpoint,
+            warm_start_checkpoint=args.warm_start_checkpoint,
+            warm_start_exclude_prefixes=args.warm_start_exclude_prefixes,
             train_from_scratch=args.train_from_scratch,
             allow_missing_stream_sidecar_fallback=args.allow_missing_stream_sidecar_fallback,
             max_mini_epochs_per_run=args.max_mini_epochs_per_run,

@@ -270,6 +270,8 @@ def run_single_experiment(
     mini_epoch_samples, 
     device, 
     resume_from: Optional[str] = None,
+    warm_start_from: Optional[str] = None,
+    warm_start_excluded_prefixes: Optional[List[str]] = None,
     shutdown_handler=None,
     run_timestamp: Optional[str] = None,
     override_checkpoint_hyperparameters: bool = False,
@@ -291,6 +293,10 @@ def run_single_experiment(
         mini_epoch_samples: Number of samples per mini-epoch
         device: Device to use for training
         resume_from: Path to checkpoint file to resume from
+        warm_start_from: Optional checkpoint path to load shared weights from
+            while keeping a fresh optimizer state and fresh training lineage.
+        warm_start_excluded_prefixes: Optional module prefixes to exclude from
+            the warm-start checkpoint load.
         shutdown_handler: Handler for graceful shutdown
         run_timestamp: Optional timestamp for the run
         override_checkpoint_hyperparameters: If True, reset optimizer state to use current hyperparameters
@@ -307,9 +313,15 @@ def run_single_experiment(
     """
     # Determine checkpoint path and start epoch
     checkpoint_path = None
+    warm_start_path = None
     start_epoch = 0
     start_mini_epoch = 0
     resume_with_stream_state = False
+
+    if resume_from and warm_start_from:
+        raise ValueError(
+            "resume_from and warm_start_from are mutually exclusive training initialization modes."
+        )
     
     if resume_from:
         checkpoint_path = Path(resume_from)
@@ -377,6 +389,18 @@ def run_single_experiment(
         logger.info(
             f"Fresh run requested target_end_epoch={target_end_epoch}; "
             f"end_epoch={num_epochs}"
+        )
+
+    if warm_start_from:
+        warm_start_path = Path(warm_start_from)
+        if not warm_start_path.exists():
+            raise FileNotFoundError(
+                f"Warm-start checkpoint file not found: {warm_start_from}"
+            )
+        logger.info(
+            "Warm-start initialization requested from %s with excluded prefixes %s",
+            warm_start_path,
+            warm_start_excluded_prefixes,
         )
     
     # Create model and trainer
@@ -516,6 +540,14 @@ def run_single_experiment(
                                 f"{msg}. Failing fast to avoid silent restart-state corruption. "
                                 "Enable --allow-missing-stream-sidecar-fallback only for manual recovery."
                             ) from e
+    elif warm_start_path:
+        trainer.warm_start_from_checkpoint(
+            warm_start_path,
+            excluded_prefixes=tuple(
+                warm_start_excluded_prefixes or ["policy_head."]
+            ),
+        )
+        logger.info(f"Warm-start loaded shared weights from {warm_start_path}")
     
     # Use results_path directly (no extra directory nesting)
     experiment_name = exp_config.get('experiment_name', 'unknown_experiment')
@@ -653,6 +685,8 @@ def run_hyperparameter_tuning_current_data(
     enable_augmentation: bool = True,
     mini_epoch_samples: int = 128000,
     resume_from: Optional[str] = None,  # Resume from checkpoint file
+    warm_start_from: Optional[str] = None,  # Fresh-lineage warm start from checkpoint file
+    warm_start_excluded_prefixes: Optional[List[str]] = None,
     shard_ranges: Optional[List[str]] = None,  # Shard ranges for each directory (e.g., ["251-300", "all"])
     shuffle_shards: bool = True,  # Control whether to shuffle data shards
     pool_size: int = DEFAULT_POOL_SIZE,  # Pool size for mixed dataset
@@ -688,6 +722,10 @@ def run_hyperparameter_tuning_current_data(
         enable_augmentation: Whether to enable data augmentation
         mini_epoch_samples: Number of samples per mini-epoch
         resume_from: Optional path to resume from (file or directory)
+        warm_start_from: Optional checkpoint path to load shared weights from
+            while keeping a fresh optimizer state and fresh training lineage.
+        warm_start_excluded_prefixes: Optional module prefixes to exclude from
+            warm-start loading.
         shard_ranges: Optional list of shard ranges for each directory (e.g., ["251-300", "all"])
         shuffle_shards: Whether to shuffle data shards before train/val split (default: True)
         pool_size: Target number of positions to maintain in memory (default: 1M)
@@ -893,6 +931,8 @@ def run_hyperparameter_tuning_current_data(
                 mini_epoch_samples,
                 device,
                 resume_from=resume_from,
+                warm_start_from=warm_start_from,
+                warm_start_excluded_prefixes=warm_start_excluded_prefixes,
                 shutdown_handler=shutdown_handler,
                 run_timestamp=run_timestamp,
                 override_checkpoint_hyperparameters=override_checkpoint_hyperparameters,
@@ -916,6 +956,8 @@ def run_hyperparameter_tuning_current_data(
                     'train_ratio': train_ratio,
                     'random_seed': random_seed,
                     'resumed_from': resume_from,
+                    'warm_started_from': warm_start_from,
+                    'warm_start_excluded_prefixes': warm_start_excluded_prefixes,
                     'max_mini_epochs': max_mini_epochs,
                     'resume_mode': resume_mode,
                     'target_end_epoch': target_end_epoch,

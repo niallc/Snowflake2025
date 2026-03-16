@@ -1004,6 +1004,30 @@ class TwoHeadedBottleneckPoolResNet(TwoHeadedResNet):
         self._initialize_weights()
 
 
+class TwoHeadedBottleneckPool3x3PolicyResNet(TwoHeadedBottleneckPoolResNet):
+    """
+    Bottleneck-pool trunk/value family with the older richer 3x3 policy head.
+
+    This is a practical head-only A/B against the lighter pooled-bias head while
+    keeping the same trunk block layout and value-head semantics.
+    """
+
+    def __init__(
+        self,
+        num_blocks: int = 13,
+        trunk_channels: int = 224,
+        board_size: int = BOARD_SIZE,
+    ):
+        super().__init__(
+            num_blocks=num_blocks,
+            trunk_channels=trunk_channels,
+            board_size=board_size,
+        )
+        self.model_type = "katago_bottleneck_pool_3x3_policy"
+        self.policy_head = PolicyHead(trunk_channels, self.board_size)
+        self._initialize_weights()
+
+
 def create_model(
     model_type: str = "katago_inspired",
     num_blocks: int | None = None,
@@ -1028,11 +1052,13 @@ def create_model(
         "katago_inspired": (7, 128),
         "katago_bottleneck": (9, 128),
         "katago_bottleneck_pool": (13, 224),
+        "katago_bottleneck_pool_3x3_policy": (13, 224),
     }
     if model_type not in model_defaults:
         raise ValueError(
             f"Unknown model type: {model_type}. Supported model types are "
-            "'katago_inspired', 'katago_bottleneck', and 'katago_bottleneck_pool'."
+            "'katago_inspired', 'katago_bottleneck', 'katago_bottleneck_pool', "
+            "and 'katago_bottleneck_pool_3x3_policy'."
         )
 
     default_blocks, default_trunk_channels = model_defaults[model_type]
@@ -1049,6 +1075,12 @@ def create_model(
         )
     if model_type == "katago_bottleneck":
         return TwoHeadedBottleneckResNet(
+            num_blocks=num_blocks,
+            trunk_channels=trunk_channels,
+            board_size=board_size,
+        )
+    if model_type == "katago_bottleneck_pool_3x3_policy":
+        return TwoHeadedBottleneckPool3x3PolicyResNet(
             num_blocks=num_blocks,
             trunk_channels=trunk_channels,
             board_size=board_size,
@@ -1117,11 +1149,13 @@ def get_model_summary(model: nn.Module) -> str:
             )
         else:
             global_block_label = "0 global-context blocks"
-        policy_head_label = (
-            "1x1 pooled-bias policy head"
-            if isinstance(getattr(model, "policy_head", None), PooledBiasPolicyHead)
-            else "Global pooling bias injection preserving board spatial structure"
-        )
+        policy_head = getattr(model, "policy_head", None)
+        if isinstance(policy_head, PooledBiasPolicyHead):
+            policy_head_label = "1x1 pooled-bias policy head"
+        elif isinstance(policy_head, PolicyHead):
+            policy_head_label = "3x3 + global-bias + LayerNorm policy head"
+        else:
+            policy_head_label = f"{type(policy_head).__name__} policy head"
         spatial_shape = f"{board_size}x{board_size} (configured model size)"
         summary = f"""
 Model Summary:

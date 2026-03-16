@@ -37,6 +37,7 @@ from .config import (
 )
 from hex_ai.data_pipeline import discover_training_data_files_all
 from hex_ai.model_spec import (
+    extract_state_dict_from_checkpoint_payload,
     load_checkpoint_payload,
     model_spec_from_model,
     resolve_model_spec_from_checkpoint_payload,
@@ -1369,6 +1370,131 @@ class Trainer:
         del checkpoint
         import gc
         gc.collect()  # Force garbage collection
+
+    def warm_start_from_checkpoint(
+        self,
+        path: Path,
+        *,
+        excluded_prefixes: Tuple[str, ...] = ("policy_head.",),
+    ) -> None:
+        """
+        Load shared weights from a checkpoint while keeping a fresh optimizer state.
+
+        This is intended for clean warm starts when a new model variant shares the
+        same trunk/value structure but intentionally changes modules such as the
+        policy head.
+        """
+        if not excluded_prefixes:
+            raise ValueError(
+                "Warm start requires at least one excluded prefix to keep semantics explicit."
+            )
+
+        checkpoint = load_checkpoint_payload(path, map_location=self.device)
+        checkpoint_model_spec = resolve_model_spec_from_checkpoint_payload(checkpoint)
+        runtime_model_spec = model_spec_from_model(self.model)
+        shared_fields = ("num_blocks", "trunk_channels", "board_size")
+        mismatched_fields = [
+            field_name
+            for field_name in shared_fields
+            if getattr(checkpoint_model_spec, field_name)
+            != getattr(runtime_model_spec, field_name)
+        ]
+        if mismatched_fields:
+            mismatch_summary = {
+                field_name: {
+                    "checkpoint": getattr(checkpoint_model_spec, field_name),
+                    "runtime": getattr(runtime_model_spec, field_name),
+                }
+                for field_name in mismatched_fields
+            }
+            raise ValueError(
+                "Warm-start checkpoint is not structurally compatible with the runtime model. "
+                "Warm starts currently require matching num_blocks, trunk_channels, and board_size. "
+                f"mismatches={mismatch_summary} path={path}"
+            )
+
+        checkpoint_state_dict = extract_state_dict_from_checkpoint_payload(checkpoint)
+        runtime_state_dict = self.model.state_dict()
+
+        def _is_excluded(key: str) -> bool:
+            return any(key.startswith(prefix) for prefix in excluded_prefixes)
+
+        filtered_state_dict = {}
+        unexpected_checkpoint_keys: List[str] = []
+        shape_mismatches: List[str] = []
+        excluded_key_count = 0
+
+        for key, value in checkpoint_state_dict.items():
+            if _is_excluded(key):
+                excluded_key_count += 1
+                continue
+            runtime_value = runtime_state_dict.get(key)
+            if runtime_value is None:
+                unexpected_checkpoint_keys.append(key)
+                continue
+            if tuple(value.shape) != tuple(runtime_value.shape):
+                shape_mismatches.append(
+                    f"{key}: checkpoint={tuple(value.shape)} runtime={tuple(runtime_value.shape)}"
+                )
+                continue
+            filtered_state_dict[key] = value
+
+        missing_required_runtime_keys = [
+            key
+            for key in runtime_state_dict.keys()
+            if not _is_excluded(key) and key not in filtered_state_dict
+        ]
+
+        if unexpected_checkpoint_keys or shape_mismatches or missing_required_runtime_keys:
+            details = []
+            if unexpected_checkpoint_keys:
+                details.append(
+                    "unexpected checkpoint keys="
+                    f"{unexpected_checkpoint_keys[:10]}"
+                )
+            if shape_mismatches:
+                details.append(f"shape mismatches={shape_mismatches[:10]}")
+            if missing_required_runtime_keys:
+                details.append(
+                    "missing runtime keys="
+                    f"{missing_required_runtime_keys[:10]}"
+                )
+            raise ValueError(
+                "Warm-start checkpoint differs outside the explicitly excluded prefixes. "
+                f"excluded_prefixes={excluded_prefixes} details={' | '.join(details)}"
+            )
+
+        load_result = self.model.load_state_dict(filtered_state_dict, strict=False)
+        missing_non_excluded = [
+            key for key in load_result.missing_keys if not _is_excluded(key)
+        ]
+        unexpected_non_excluded = [
+            key for key in load_result.unexpected_keys if not _is_excluded(key)
+        ]
+        if missing_non_excluded or unexpected_non_excluded:
+            raise RuntimeError(
+                "Warm-start load produced unexpected state-dict mismatches. "
+                f"missing_non_excluded={missing_non_excluded} "
+                f"unexpected_non_excluded={unexpected_non_excluded}"
+            )
+
+        self.current_epoch = 0
+        self.best_val_loss = float("inf")
+        logger.info(
+            "Warm-start loaded %d tensors from %s with fresh optimizer state. "
+            "Excluded %d tensors using prefixes %s. "
+            "checkpoint_model_type=%s runtime_model_type=%s",
+            len(filtered_state_dict),
+            path,
+            excluded_key_count,
+            excluded_prefixes,
+            checkpoint_model_spec.model_type,
+            runtime_model_spec.model_type,
+        )
+
+        del checkpoint
+        import gc
+        gc.collect()
 
 
 
