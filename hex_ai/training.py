@@ -648,12 +648,15 @@ class PolicyValueLoss(nn.Module):
                 )
         
         # Create loss dictionary first
+        active_policy_samples = int(non_terminal_indices.sum().item())
         loss_dict = {
             'total_loss': total_loss.item(),
             'policy_loss': policy_loss.item(),
             'value_loss': value_loss.item(),
             'entropy_loss': entropy_loss.item(),
-            'logits_l2_loss': logits_l2_loss.item()
+            'logits_l2_loss': logits_l2_loss.item(),
+            'policy_active_samples': active_policy_samples,
+            'policy_total_samples': int(batch_size),
         }
         
         # CRITICAL: Check for NaN values and fail fast with detailed debugging
@@ -933,6 +936,12 @@ class Trainer:
         self.device = device
         self.max_grad_norm = max_grad_norm
         self.run_timestamp = run_timestamp
+        if experiment_name is None:
+            if run_timestamp:
+                experiment_name = f"experiment_{run_timestamp}"
+            else:
+                experiment_name = f"experiment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self.experiment_name = experiment_name
         self.shutdown_handler = shutdown_handler
         self.use_policy_search_targets = bool(use_policy_search_targets)
         self.soft_target_legal_mix_alpha = float(soft_target_legal_mix_alpha)
@@ -987,7 +996,10 @@ class Trainer:
                 csv_log_file = f"checkpoints/bookkeeping/training_metrics_{self.run_timestamp}.csv"
             else:
                 csv_log_file = "checkpoints/bookkeeping/training_metrics.csv"
-            self.csv_logger = TrainingLogger(log_file=csv_log_file, experiment_name=experiment_name)
+            self.csv_logger = TrainingLogger(
+                log_file=csv_log_file,
+                experiment_name=self.experiment_name,
+            )
         
         # System analysis
         if enable_system_analysis:
@@ -1070,6 +1082,8 @@ class Trainer:
             'entropy_loss': [],
             'logits_l2_loss': []
         }
+        val_policy_active_samples = 0
+        val_policy_total_samples = 0
         
         with torch.no_grad():
             for batch_idx, (boards, policies, values, move_stage) in enumerate(self.val_loader):
@@ -1126,6 +1140,8 @@ class Trainer:
                 val_losses.append(loss_dict['total_loss'])
                 for key in val_metrics:
                     val_metrics[key].append(loss_dict[key])
+                val_policy_active_samples += int(loss_dict['policy_active_samples'])
+                val_policy_total_samples += int(loss_dict['policy_total_samples'])
         
         # Check if val_metrics is empty before computing averages
         val_metrics_empty = all(len(values) == 0 for values in val_metrics.values())
@@ -1155,6 +1171,13 @@ class Trainer:
         val_avg['validation_time_seconds'] = float(validation_elapsed)
         val_avg['validation_batches'] = int(validation_batches)
         val_avg['validation_samples'] = int(validation_samples)
+        val_avg['policy_active_samples'] = int(val_policy_active_samples)
+        val_avg['policy_total_samples'] = int(val_policy_total_samples)
+        val_avg['policy_active_fraction'] = (
+            float(val_policy_active_samples / val_policy_total_samples)
+            if val_policy_total_samples > 0
+            else float('nan')
+        )
 
         logger.info(
             "Validation completed for epoch %s mini-epoch %s: %d batches, %d samples, %.2fs",
@@ -1355,6 +1378,8 @@ class Trainer:
         """Update loss metrics in the training state."""
         for key in state['mini_epoch_metrics']:
             state['mini_epoch_metrics'][key].append(loss_dict[key])
+        state['policy_active_samples'] += int(loss_dict['policy_active_samples'])
+        state['policy_total_samples'] += int(loss_dict['policy_total_samples'])
 
 
     def _apply_gradient_clipping(self, state: Dict) -> None:
@@ -1492,6 +1517,8 @@ class Trainer:
                 'logits_l2_loss': []
             },
             'gradient_norms': [],
+            'policy_active_samples': 0,
+            'policy_total_samples': 0,
             'start_time': time.time(),
             'next_log_batch': 1,
             'last_time_log': time.time(),
@@ -1611,7 +1638,12 @@ class Trainer:
             ),
             'policy_weight': getattr(self.criterion, 'policy_weight', ''),
             'value_weight': getattr(self.criterion, 'value_weight', ''),
+            'entropy_weight': getattr(self.criterion, 'entropy_weight', ''),
+            'label_smoothing': getattr(self.criterion, 'label_smoothing', ''),
+            'logits_l2_lambda': getattr(self.criterion, 'logits_l2_lambda', ''),
+            'soft_target_legal_mix_alpha': getattr(self.criterion, 'soft_target_legal_mix_alpha', ''),
             'total_loss_weight': getattr(self.criterion, 'policy_weight', 0) + getattr(self.criterion, 'value_weight', 0),
+            'total_loss_formula': 'policy_weight*policy_loss + value_weight*value_loss + entropy_loss + logits_l2_loss',
             'dropout_prob': 'N/A (not used in current architecture)',
             'weight_decay': self.optimizer.param_groups[0].get('weight_decay', 0.0),
             'max_grad_norm': getattr(self, 'max_grad_norm', ''),
@@ -1746,6 +1778,13 @@ class Trainer:
             key: float(np.mean(values)) if values else float('nan') 
             for key, values in state['mini_epoch_metrics'].items()
         }
+        mini_epoch_avg['policy_active_samples'] = int(state['policy_active_samples'])
+        mini_epoch_avg['policy_total_samples'] = int(state['policy_total_samples'])
+        mini_epoch_avg['policy_active_fraction'] = (
+            float(state['policy_active_samples'] / state['policy_total_samples'])
+            if state['policy_total_samples'] > 0
+            else float('nan')
+        )
         
         # CRITICAL: Check for NaN in mini-epoch averages
         for key, value in mini_epoch_avg.items():

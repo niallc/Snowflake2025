@@ -40,13 +40,19 @@ class TrainingLogger:
             
             # Hyperparameters
             'learning_rate', 'batch_size', 'dataset_size', 'network_structure',
-            'policy_weight', 'value_weight', 'total_loss_weight',
+            'policy_weight', 'value_weight', 'entropy_weight',
+            'label_smoothing', 'logits_l2_lambda', 'soft_target_legal_mix_alpha',
+            'total_loss_weight', 'total_loss_formula',
             'dropout_prob', 'weight_decay', 'max_grad_norm',
             'value_learning_rate_factor', 'value_weight_decay_factor',
             
             # Training metrics
-            'policy_loss', 'value_loss', 'total_loss',
-            'val_policy_loss', 'val_value_loss', 'val_total_loss',
+            'policy_loss', 'value_loss', 'entropy_loss', 'logits_l2_loss',
+            'total_loss', 'policy_active_samples', 'policy_total_samples',
+            'policy_active_fraction', 'val_policy_loss', 'val_value_loss',
+            'val_entropy_loss', 'val_logits_l2_loss', 'val_total_loss',
+            'val_policy_active_samples', 'val_policy_total_samples',
+            'val_policy_active_fraction',
             
             # Performance metrics
             'training_time', 'epoch_time', 'samples_per_second',
@@ -80,6 +86,11 @@ class TrainingLogger:
         self._init_performance_tracking()
         
         logger.info(f"Training logger initialized: {self.log_file}")
+
+    @staticmethod
+    def _csv_value(value: Any) -> Any:
+        """Convert `None` to an empty CSV field while preserving real zeroes."""
+        return '' if value is None else value
     
     def _init_performance_tracking(self):
         """Initialize performance tracking variables."""
@@ -226,7 +237,12 @@ class TrainingLogger:
             'network_structure': hyperparams.get('network_structure', ''),
             'policy_weight': hyperparams.get('policy_weight', ''),
             'value_weight': hyperparams.get('value_weight', ''),
+            'entropy_weight': hyperparams.get('entropy_weight', ''),
+            'label_smoothing': hyperparams.get('label_smoothing', ''),
+            'logits_l2_lambda': hyperparams.get('logits_l2_lambda', ''),
+            'soft_target_legal_mix_alpha': hyperparams.get('soft_target_legal_mix_alpha', ''),
             'total_loss_weight': hyperparams.get('total_loss_weight', ''),
+            'total_loss_formula': hyperparams.get('total_loss_formula', ''),
             'dropout_prob': hyperparams.get('dropout_prob', ''),
             'weight_decay': hyperparams.get('weight_decay', ''),
             'max_grad_norm': hyperparams.get('max_grad_norm', ''),
@@ -236,29 +252,39 @@ class TrainingLogger:
             # Training metrics
             'policy_loss': train_metrics.get('policy_loss', ''),
             'value_loss': train_metrics.get('value_loss', ''),
+            'entropy_loss': train_metrics.get('entropy_loss', ''),
+            'logits_l2_loss': train_metrics.get('logits_l2_loss', ''),
             'total_loss': train_metrics.get('total_loss', ''),
+            'policy_active_samples': train_metrics.get('policy_active_samples', ''),
+            'policy_total_samples': train_metrics.get('policy_total_samples', ''),
+            'policy_active_fraction': train_metrics.get('policy_active_fraction', ''),
             'val_policy_loss': val_metrics.get('policy_loss', '') if val_metrics else '',
             'val_value_loss': val_metrics.get('value_loss', '') if val_metrics else '',
+            'val_entropy_loss': val_metrics.get('entropy_loss', '') if val_metrics else '',
+            'val_logits_l2_loss': val_metrics.get('logits_l2_loss', '') if val_metrics else '',
             'val_total_loss': val_metrics.get('total_loss', '') if val_metrics else '',
+            'val_policy_active_samples': val_metrics.get('policy_active_samples', '') if val_metrics else '',
+            'val_policy_total_samples': val_metrics.get('policy_total_samples', '') if val_metrics else '',
+            'val_policy_active_fraction': val_metrics.get('policy_active_fraction', '') if val_metrics else '',
             
             # Performance metrics
             'training_time': training_time,
             'epoch_time': epoch_time,
             'samples_per_second': samples_per_second,
             'validation_time': validation_time,
-            'validation_batches': validation_batches or '',
-            'validation_samples': validation_samples or '',
+            'validation_batches': self._csv_value(validation_batches),
+            'validation_samples': self._csv_value(validation_samples),
             'memory_usage_mb': memory_usage_mb,
-            'gpu_memory_mb': gpu_memory_mb or '',
+            'gpu_memory_mb': self._csv_value(gpu_memory_mb),
             
             # Training state
             'early_stopped': False,  # Will be updated later if needed
-            'best_val_loss': best_val_loss or '',  # Will be updated by trainer
+            'best_val_loss': self._csv_value(best_val_loss),  # Will be updated by trainer
             'epochs_trained': epoch + 1,
             
             # Model statistics
-            'gradient_norm': gradient_norm or '',
-            'post_clip_gradient_norm': post_clip_gradient_norm or '',
+            'gradient_norm': self._csv_value(gradient_norm),
+            'post_clip_gradient_norm': self._csv_value(post_clip_gradient_norm),
             'gradient_norm_mean': gradient_stats.get('mean', '') if gradient_stats else '',
             'gradient_norm_max': gradient_stats.get('max', '') if gradient_stats else '',
             'gradient_norm_min': gradient_stats.get('min', '') if gradient_stats else '',
@@ -506,7 +532,12 @@ class TrainingLogger:
             'network_structure': hyperparams.get('network_structure', ''),
             'policy_weight': hyperparams.get('policy_weight', ''),
             'value_weight': hyperparams.get('value_weight', ''),
+            'entropy_weight': hyperparams.get('entropy_weight', ''),
+            'label_smoothing': hyperparams.get('label_smoothing', ''),
+            'logits_l2_lambda': hyperparams.get('logits_l2_lambda', ''),
+            'soft_target_legal_mix_alpha': hyperparams.get('soft_target_legal_mix_alpha', ''),
             'total_loss_weight': hyperparams.get('total_loss_weight', ''),
+            'total_loss_formula': hyperparams.get('total_loss_formula', ''),
             'dropout_prob': hyperparams.get('dropout_prob', ''),
             'weight_decay': hyperparams.get('weight_decay', ''),
             'max_grad_norm': hyperparams.get('max_grad_norm', ''),
@@ -515,26 +546,36 @@ class TrainingLogger:
             # Training metrics
             'policy_loss': train_metrics.get('policy_loss', ''),
             'value_loss': train_metrics.get('value_loss', ''),
+            'entropy_loss': train_metrics.get('entropy_loss', ''),
+            'logits_l2_loss': train_metrics.get('logits_l2_loss', ''),
             'total_loss': train_metrics.get('total_loss', ''),
+            'policy_active_samples': train_metrics.get('policy_active_samples', ''),
+            'policy_total_samples': train_metrics.get('policy_total_samples', ''),
+            'policy_active_fraction': train_metrics.get('policy_active_fraction', ''),
             'val_policy_loss': val_metrics.get('policy_loss', '') if val_metrics else '',
             'val_value_loss': val_metrics.get('value_loss', '') if val_metrics else '',
+            'val_entropy_loss': val_metrics.get('entropy_loss', '') if val_metrics else '',
+            'val_logits_l2_loss': val_metrics.get('logits_l2_loss', '') if val_metrics else '',
             'val_total_loss': val_metrics.get('total_loss', '') if val_metrics else '',
+            'val_policy_active_samples': val_metrics.get('policy_active_samples', '') if val_metrics else '',
+            'val_policy_total_samples': val_metrics.get('policy_total_samples', '') if val_metrics else '',
+            'val_policy_active_fraction': val_metrics.get('policy_active_fraction', '') if val_metrics else '',
             # Performance metrics
             'training_time': training_time,
             'epoch_time': epoch_time,
             'samples_per_second': samples_per_second,
             'validation_time': validation_time,
-            'validation_batches': validation_batches or '',
-            'validation_samples': validation_samples or '',
+            'validation_batches': self._csv_value(validation_batches),
+            'validation_samples': self._csv_value(validation_samples),
             'memory_usage_mb': memory_usage_mb,
-            'gpu_memory_mb': gpu_memory_mb or '',
+            'gpu_memory_mb': self._csv_value(gpu_memory_mb),
             # Training state
             'early_stopped': False,
-            'best_val_loss': best_val_loss or '',
+            'best_val_loss': self._csv_value(best_val_loss),
             'epochs_trained': '',
             # Model statistics
-            'gradient_norm': gradient_norm or '',
-            'post_clip_gradient_norm': post_clip_gradient_norm or '',
+            'gradient_norm': self._csv_value(gradient_norm),
+            'post_clip_gradient_norm': self._csv_value(post_clip_gradient_norm),
             'gradient_norm_mean': gradient_stats.get('mean', '') if gradient_stats else '',
             'gradient_norm_max': gradient_stats.get('max', '') if gradient_stats else '',
             'gradient_norm_min': gradient_stats.get('min', '') if gradient_stats else '',

@@ -425,6 +425,7 @@ def run_single_experiment(
         train_loader=train_loader,
         val_loader=val_loader,
         device=device,
+        experiment_name=exp_config.get('experiment_name'),
         run_timestamp=run_timestamp,
         shutdown_handler=shutdown_handler,
         **trainer_params
@@ -721,7 +722,10 @@ def run_hyperparameter_tuning_current_data(
     results_path.mkdir(parents=True, exist_ok=True)
     
     if experiment_name is None:
-        experiment_name = f"experiment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        if run_timestamp:
+            experiment_name = f"experiment_{run_timestamp}"
+        else:
+            experiment_name = f"experiment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     
     if concise_restart_logging:
         logger.info(
