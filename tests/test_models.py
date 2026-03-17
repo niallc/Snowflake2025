@@ -6,16 +6,26 @@ and produce the expected output shapes.
 """
 
 import unittest
+import os
 import torch
 import torch.nn as nn
 from pathlib import Path
 import sys
+from tempfile import TemporaryDirectory
 
 # Environment validation is now handled automatically in hex_ai/__init__.py
 
+from hex_ai.inference.model_wrapper import ModelWrapper
+from hex_ai.model_spec import model_spec_from_model
 from hex_ai.models import (
-    ResNetBlock, TwoHeadedBottleneckPoolResNet, TwoHeadedResNet, create_model, 
-    count_parameters, get_model_summary
+    ResNetBlock,
+    TwoHeadedBottleneckPool3x3PolicyResNet,
+    TwoHeadedBottleneckPoolResNet,
+    TwoHeadedResNet,
+    count_parameters,
+    create_model,
+    get_model_summary,
+    get_supported_model_types,
 )
 from hex_ai.config import BOARD_SIZE, NUM_PLAYERS, POLICY_OUTPUT_SIZE, VALUE_OUTPUT_SIZE
 
@@ -191,6 +201,19 @@ class TestModelFactory(unittest.TestCase):
         self.assertEqual(model.global_block_indices, (3, 8))
         self.assertEqual(model.value_head.pool_mode, "mean_max")
 
+    def test_create_model_katago_bottleneck_pool_3x3_policy_defaults(self):
+        """Test creating the 3x3-policy pooled bottleneck challenger."""
+        model = create_model("katago_bottleneck_pool_3x3_policy")
+        self.assertIsInstance(model, TwoHeadedBottleneckPool3x3PolicyResNet)
+        self.assertEqual(model.num_blocks, 13)
+        self.assertEqual(model.trunk_channels, 224)
+        self.assertEqual(model.global_block_indices, (3, 8))
+        self.assertEqual(model.value_head.pool_mode, "mean_max")
+
+    def test_supported_model_types_include_3x3_policy_variant(self):
+        """Test that the supported-type registry includes the new family."""
+        self.assertIn("katago_bottleneck_pool_3x3_policy", get_supported_model_types())
+
     def test_create_model_board_size_propagates(self):
         """Test that board_size is carried into model construction and output shapes."""
         board_size = 9
@@ -218,6 +241,61 @@ class TestModelFactory(unittest.TestCase):
         """Test that invalid model type raises error."""
         with self.assertRaises(ValueError):
             create_model("invalid_model")
+
+    def test_model_summary_describes_3x3_policy_bottleneck_pool_variant(self):
+        """Test that summary text keeps pooled-bias trunk details for head-only variants."""
+        model = create_model("katago_bottleneck_pool_3x3_policy")
+        summary = get_model_summary(model)
+        self.assertIn("pooled-bias blocks at 1-indexed positions [4, 9]", summary)
+        self.assertIn("3x3 + global-bias + LayerNorm policy head", summary)
+
+    def test_model_wrapper_reloads_checkpoint_for_3x3_policy_variant(self):
+        """Test spec-based checkpoint reload for the new bottleneck-pool family."""
+        model = create_model("katago_bottleneck_pool_3x3_policy")
+        checkpoint = {
+            "model_spec": model_spec_from_model(model).to_dict(),
+            "model_state_dict": model.state_dict(),
+        }
+
+        with TemporaryDirectory() as tmp_dir:
+            checkpoint_path = Path(tmp_dir) / "checkpoint.pt"
+            torch.save(checkpoint, checkpoint_path)
+
+            wrapper = ModelWrapper(str(checkpoint_path), device="cpu")
+
+        self.assertEqual(
+            wrapper.model_spec.model_type, "katago_bottleneck_pool_3x3_policy"
+        )
+        self.assertIsInstance(wrapper.model, TwoHeadedBottleneckPool3x3PolicyResNet)
+
+
+class TestAppDevModelPaths(unittest.TestCase):
+    """Regression tests for dev-server model-path normalization."""
+
+    def test_normalize_requested_model_path_strips_checkpoints_prefix(self):
+        from hex_ai.web import app_dev
+
+        relative_path = "checkpoints/foo/bar.pt.gz"
+        absolute_path = os.path.abspath(relative_path)
+
+        self.assertEqual(
+            app_dev._normalize_requested_model_path(relative_path),
+            "foo/bar.pt.gz",
+        )
+        self.assertEqual(
+            app_dev._normalize_requested_model_path(absolute_path),
+            "foo/bar.pt.gz",
+        )
+
+    def test_register_dynamic_model_normalizes_prefixed_relative_path(self):
+        from hex_ai.web import app_dev
+
+        model_id = "test_dynamic_model"
+        try:
+            app_dev.register_dynamic_model(model_id, "checkpoints/foo/bar.pt.gz")
+            self.assertEqual(app_dev.DYNAMIC_MODELS[model_id], "foo/bar.pt.gz")
+        finally:
+            app_dev.DYNAMIC_MODELS.pop(model_id, None)
 
 if __name__ == '__main__':
     unittest.main() 

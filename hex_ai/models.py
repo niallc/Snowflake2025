@@ -14,6 +14,7 @@ Active architecture design references:
 - docs/value_head_specification.md
 """
 
+from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -1028,6 +1029,56 @@ class TwoHeadedBottleneckPool3x3PolicyResNet(TwoHeadedBottleneckPoolResNet):
         self._initialize_weights()
 
 
+@dataclass(frozen=True)
+class ModelFamilyDefinition:
+    """Registry entry describing one supported model family."""
+
+    model_class: type[nn.Module]
+    default_num_blocks: int
+    default_trunk_channels: int
+
+
+MODEL_FAMILY_REGISTRY: Dict[str, ModelFamilyDefinition] = {
+    "katago_inspired": ModelFamilyDefinition(
+        model_class=TwoHeadedResNet,
+        default_num_blocks=7,
+        default_trunk_channels=128,
+    ),
+    "katago_bottleneck": ModelFamilyDefinition(
+        model_class=TwoHeadedBottleneckResNet,
+        default_num_blocks=9,
+        default_trunk_channels=128,
+    ),
+    "katago_bottleneck_pool": ModelFamilyDefinition(
+        model_class=TwoHeadedBottleneckPoolResNet,
+        default_num_blocks=13,
+        default_trunk_channels=224,
+    ),
+    "katago_bottleneck_pool_3x3_policy": ModelFamilyDefinition(
+        model_class=TwoHeadedBottleneckPool3x3PolicyResNet,
+        default_num_blocks=13,
+        default_trunk_channels=224,
+    ),
+}
+
+
+def get_supported_model_types() -> Tuple[str, ...]:
+    """Return supported model types in their canonical display order."""
+    return tuple(MODEL_FAMILY_REGISTRY.keys())
+
+
+def _format_supported_model_types() -> str:
+    """Return a human-readable list of supported model type names."""
+    supported = [repr(model_type) for model_type in get_supported_model_types()]
+    if not supported:
+        return "none"
+    if len(supported) == 1:
+        return supported[0]
+    if len(supported) == 2:
+        return f"{supported[0]} and {supported[1]}"
+    return f"{', '.join(supported[:-1])}, and {supported[-1]}"
+
+
 def create_model(
     model_type: str = "katago_inspired",
     num_blocks: int | None = None,
@@ -1048,44 +1099,19 @@ def create_model(
     Returns:
         Initialized model instance
     """
-    model_defaults = {
-        "katago_inspired": (7, 128),
-        "katago_bottleneck": (9, 128),
-        "katago_bottleneck_pool": (13, 224),
-        "katago_bottleneck_pool_3x3_policy": (13, 224),
-    }
-    if model_type not in model_defaults:
+    definition = MODEL_FAMILY_REGISTRY.get(model_type)
+    if definition is None:
         raise ValueError(
             f"Unknown model type: {model_type}. Supported model types are "
-            "'katago_inspired', 'katago_bottleneck', 'katago_bottleneck_pool', "
-            "and 'katago_bottleneck_pool_3x3_policy'."
+            f"{_format_supported_model_types()}."
         )
 
-    default_blocks, default_trunk_channels = model_defaults[model_type]
     if num_blocks is None:
-        num_blocks = default_blocks
+        num_blocks = definition.default_num_blocks
     if trunk_channels is None:
-        trunk_channels = default_trunk_channels
+        trunk_channels = definition.default_trunk_channels
 
-    if model_type == "katago_inspired":
-        return TwoHeadedResNet(
-            num_blocks=num_blocks,
-            trunk_channels=trunk_channels,
-            board_size=board_size,
-        )
-    if model_type == "katago_bottleneck":
-        return TwoHeadedBottleneckResNet(
-            num_blocks=num_blocks,
-            trunk_channels=trunk_channels,
-            board_size=board_size,
-        )
-    if model_type == "katago_bottleneck_pool_3x3_policy":
-        return TwoHeadedBottleneckPool3x3PolicyResNet(
-            num_blocks=num_blocks,
-            trunk_channels=trunk_channels,
-            board_size=board_size,
-        )
-    return TwoHeadedBottleneckPoolResNet(
+    return definition.model_class(
         num_blocks=num_blocks,
         trunk_channels=trunk_channels,
         board_size=board_size,
@@ -1144,7 +1170,7 @@ def get_model_summary(model: nn.Module) -> str:
             global_block_label = (
                 f"{global_block_count} pooled-bias blocks at 1-indexed positions "
                 f"{[idx + 1 for idx in global_block_indices]}"
-                if getattr(model, "model_type", "") == "katago_bottleneck_pool"
+                if isinstance(model, TwoHeadedBottleneckPoolResNet)
                 else f"{global_block_count} global pooling blocks (every 3rd block)"
             )
         else:

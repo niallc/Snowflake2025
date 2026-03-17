@@ -215,7 +215,7 @@ def handle_model_resolution_error(exc: ModelResolutionError):
 
 
 def _normalize_requested_model_path(model_path: str | None) -> str | None:
-    """Normalize browser-provided model paths while preserving checkpoints-relative paths."""
+    """Normalize browser-provided model paths into one checkpoints-relative form."""
     if not isinstance(model_path, str):
         return None
 
@@ -225,6 +225,11 @@ def _normalize_requested_model_path(model_path: str | None) -> str | None:
 
     normalized = os.path.normpath(normalized)
     if not os.path.isabs(normalized):
+        if normalized == "checkpoints":
+            return "."
+        checkpoints_prefix = "checkpoints" + os.sep
+        if normalized.startswith(checkpoints_prefix):
+            return normalized[len(checkpoints_prefix):]
         return normalized
 
     checkpoints_root = os.path.abspath("checkpoints")
@@ -338,9 +343,14 @@ def _ensure_requested_dynamic_model_registered(model_id: str | None, model_path:
 def _resolve_model_path(model_id: str) -> str:
     """Resolve dynamic/registered/direct model inputs to a concrete file path."""
     if model_id in DYNAMIC_MODELS:
-        model_path = DYNAMIC_MODELS[model_id]
-        if not os.path.isabs(model_path):
-            model_path = os.path.join("checkpoints", model_path)
+        stored_model_path = DYNAMIC_MODELS[model_id]
+        normalized_model_path = (
+            _normalize_requested_model_path(stored_model_path) or stored_model_path
+        )
+        if os.path.isabs(normalized_model_path):
+            model_path = normalized_model_path
+        else:
+            model_path = os.path.join("checkpoints", normalized_model_path)
         if not os.path.exists(model_path):
             raise ModelResolutionError(
                 model_id=model_id,
@@ -348,11 +358,11 @@ def _resolve_model_path(model_id: str) -> str:
                 user_message=_build_model_resolution_message(
                     model_id,
                     reason="model_file_missing",
-                    model_path=DYNAMIC_MODELS[model_id],
+                    model_path=normalized_model_path,
                     validation_error=f"Model file does not exist: {model_path}",
                 ),
                 hint=MODEL_SELECTION_REFRESH_HINT,
-                model_path=DYNAMIC_MODELS[model_id],
+                model_path=normalized_model_path,
                 details={
                     "resolved_model_path": model_path,
                     "dynamic_registry_hit": True,
@@ -383,8 +393,11 @@ def get_model(model_id="best"):
 
 def register_dynamic_model(model_id: str, model_path: str):
     """Register a dynamically selected model."""
-    DYNAMIC_MODELS[model_id] = model_path
-    app.logger.info(f"Registered dynamic model {model_id} -> {model_path}")
+    normalized_model_path = _normalize_requested_model_path(model_path)
+    if normalized_model_path is None:
+        raise ValueError(f"Invalid dynamic model path: {model_path!r}")
+    DYNAMIC_MODELS[model_id] = normalized_model_path
+    app.logger.info(f"Registered dynamic model {model_id} -> {normalized_model_path}")
 
 def get_available_models():
     """Return list of available model configurations."""
@@ -1592,9 +1605,13 @@ def api_select_model():
         return jsonify({"error": "model_path required"}), 400
     
     try:
+        normalized_model_path = _normalize_requested_model_path(model_path)
+        if normalized_model_path is None:
+            return jsonify({"success": False, "error": "Invalid model_path"}), 400
+
         app.logger.debug(f"Validating model path: {model_path}")
         # Validate the model
-        validation = MODEL_BROWSER.validate_model(model_path)
+        validation = MODEL_BROWSER.validate_model(normalized_model_path)
         app.logger.debug(f"Validation result: {validation}")
         
         if not validation['valid']:
@@ -1606,14 +1623,14 @@ def api_select_model():
             model_id = f"model_{int(datetime.now().timestamp())}"
         
         app.logger.debug(f"Using model_id: {model_id}")
-        app.logger.debug(f"Model path: {model_path}")
+        app.logger.debug(f"Model path: {normalized_model_path}")
         
         # Register the dynamic model
-        register_dynamic_model(model_id, model_path)
+        register_dynamic_model(model_id, normalized_model_path)
         app.logger.debug(f"Registered dynamic model. Current DYNAMIC_MODELS: {DYNAMIC_MODELS}")
         
         # Add to recent models
-        add_recent_model(model_path)
+        add_recent_model(normalized_model_path)
         
         # Test loading the model immediately to catch any issues
         app.logger.debug("Testing model loading...")
@@ -1630,7 +1647,7 @@ def api_select_model():
         return jsonify({
             "success": True,
             "model_id": model_id,
-            "model_path": model_path,
+            "model_path": normalized_model_path,
             "model_info": validation
         })
         
