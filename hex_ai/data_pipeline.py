@@ -14,6 +14,7 @@ import torch.nn as nn
 import numpy as np
 import gzip
 import pickle
+import math
 import base64
 import hashlib
 import json
@@ -177,15 +178,18 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         # Position pool and shard management
         self.position_pool = deque()
         self.shard_queues: List[List[Path]] = []  # One queue per directory
-        # Track loaded shard counts per directory for proportional loading.
-        # Using counts avoids storing one path string per loaded shard.
+        # Track fully-consumed shard counts per directory for diagnostics and
+        # stream-state export without storing one path per consumed shard.
         self.loaded_shard_counts: List[int] = [0] * len(self.data_dirs)
         # Track read offsets within the head shard of each directory queue.
         # Offset is 0 when no partially-consumed shard exists for that directory.
         self.current_shard_offsets: List[int] = [0] * len(self.data_dirs)
         self._shard_lookup_by_dir: List[Dict[str, Path]] = []
         self.dataset_fingerprint: Optional[str] = None
-        self.directory_weights: List[float] = []  # Proportional weights for each directory
+        self.directory_weights: List[float] = []  # Target sample mix per directory
+        self.estimated_positions_by_dir: List[int] = [0] * len(self.data_dirs)
+        self.estimated_games_by_dir: List[int] = [0] * len(self.data_dirs)
+        self.pool_position_counts_by_dir: List[int] = [0] * len(self.data_dirs)
         
         # Statistics and monitoring
         self.total_positions_yielded = 0
@@ -312,6 +316,8 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         
         total_estimated_positions = 0
         total_estimated_games = 0
+        estimated_positions_by_dir = [0] * len(self.data_dirs)
+        estimated_games_by_dir = [0] * len(self.data_dirs)
         
         for i, (data_dir, shard_queue) in enumerate(zip(self.data_dirs, self.shard_queues)):
             if not shard_queue:
@@ -354,11 +360,15 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 
                 total_estimated_positions += estimated_dir_positions
                 total_estimated_games += estimated_dir_games
+                estimated_positions_by_dir[i] = estimated_dir_positions
+                estimated_games_by_dir[i] = estimated_dir_games
                 
                 if self.verbose:
                     self.logger.info(f"Directory {i+1} ({data_dir}): ~{estimated_dir_positions:,} positions, ~{estimated_dir_games:,} games "
                                    f"({total_shards_in_dir} shards, sampled {sample_size})")
         
+        self.estimated_positions_by_dir = estimated_positions_by_dir
+        self.estimated_games_by_dir = estimated_games_by_dir
         self.estimated_total_positions = total_estimated_positions
         self.estimated_total_games = total_estimated_games
         
@@ -405,6 +415,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             
             # Clear position pool
             self.position_pool = deque()
+            self.pool_position_counts_by_dir = [0] * len(self.data_dirs)
             
             # Shuffle shard queues for this epoch (using same random seed for reproducibility)
             for queue in self.shard_queues:
@@ -418,21 +429,22 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 self.logger.info(f"[StreamingMixedShardDataset] Training dataset reset complete: {total_shards} shards available, pool size: {len(self.position_pool):,}")
     
     def _calculate_directory_weights(self):
-        """Calculate proportional weights for each directory based on shard counts.
-        
-        Note: Weights are based on number of shards (files), not position counts.
-        This prevents over-weighting directories with very large individual shards.
-        """
-        shard_counts = [len(queue) for queue in self.shard_queues]
-        total_shards = sum(shard_counts)
-        
-        if total_shards == 0:
-            raise RuntimeError("No shards found in any directory")
-        
-        self.directory_weights = [count / total_shards for count in shard_counts]
-        
+        """Calculate proportional weights for each directory based on estimated positions."""
+        total_positions = sum(self.estimated_positions_by_dir)
+
+        if total_positions <= 0:
+            raise RuntimeError("Estimated position count is zero across all directories")
+
+        self.directory_weights = [
+            estimated_positions / total_positions
+            for estimated_positions in self.estimated_positions_by_dir
+        ]
+
         if self.verbose:
-            self.logger.info(f"Directory weights (based on shard counts): {[f'{w:.3f}' for w in self.directory_weights]}")
+            self.logger.info(
+                "Directory weights (based on estimated positions): %s",
+                [f"{weight:.3f}" for weight in self.directory_weights],
+            )
     
     def _initialize_validation_dataset(self):
         """
@@ -671,6 +683,35 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
             return source_ref
         return None
 
+    def _rebuild_pool_position_counts(self) -> None:
+        """Recompute per-directory counts from the current in-memory pool."""
+        counts = [0] * len(self.data_dirs)
+        for position in self.position_pool:
+            source_ref = self._extract_source_ref(position)
+            if source_ref is None:
+                raise RuntimeError(
+                    "Training pool contains an entry without a source ref; "
+                    "cannot rebuild directory mix counts."
+                )
+            counts[source_ref[0]] += 1
+        self.pool_position_counts_by_dir = counts
+
+    def _decrement_pool_position_count(self, position: PositionPoolEntry) -> None:
+        """Update pool directory counts after a position is popped from the pool."""
+        source_ref = self._extract_source_ref(position)
+        if source_ref is None:
+            raise RuntimeError(
+                "Training pool position is missing source_ref during iteration; "
+                "cannot maintain directory mix counts."
+            )
+        dir_idx = source_ref[0]
+        self.pool_position_counts_by_dir[dir_idx] -= 1
+        if self.pool_position_counts_by_dir[dir_idx] < 0:
+            raise RuntimeError(
+                f"Pool directory count underflow for dir_idx={dir_idx}; "
+                "pool accounting is inconsistent."
+            )
+
     def _serialize_shard_queues(self) -> List[List[str]]:
         """Serialize shard queues as filename-only lists."""
         return [[path.name for path in queue] for queue in self.shard_queues]
@@ -880,6 +921,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         self.current_shard_offsets = [int(v) for v in current_shard_offsets]
         self.loaded_shard_counts = [int(v) for v in loaded_shard_counts]
         self.position_pool = restored_pool
+        self._rebuild_pool_position_counts()
         self.total_positions_yielded = int(state.get("total_positions_yielded", 0))
         self.total_shards_loaded = int(state.get("total_shards_loaded", 0))
         self.approx_batch_count = int(state.get("approx_batch_count", 0))
@@ -971,6 +1013,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
 
             # Yield positions from pool
             position = self.position_pool.popleft()
+            self._decrement_pool_position_count(position)
             yield self._process_position(position)
             self.total_positions_yielded += 1
             
@@ -1027,7 +1070,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                 from hex_ai.error_handling import GracefulShutdownRequested
                 raise GracefulShutdownRequested()
             
-            # Select directory to load from based on weights
+            # Select directory to load from based on current pool-mix deficit.
             selected_dir_idx = self._select_directory_for_loading()
             if selected_dir_idx is None:
                 break  # No more shards available
@@ -1065,13 +1108,31 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                         f"equal to shard length {len(file_examples)} but is still queued."
                     )
                 
+                remaining_in_shard = len(file_examples) - shard_offset
+                target_pool_count_for_dir = self.directory_weights[selected_dir_idx] * self.pool_size
+                current_pool_count_for_dir = self.pool_position_counts_by_dir[selected_dir_idx]
+                directory_position_deficit = target_pool_count_for_dir - current_pool_count_for_dir
+                positions_remaining_to_fill = positions_needed - positions_added
+                if directory_position_deficit > 0:
+                    target_take = min(
+                        positions_remaining_to_fill,
+                        max(1, int(math.ceil(directory_position_deficit))),
+                    )
+                else:
+                    target_take = positions_remaining_to_fill
+
+                shard_take_limit = min(remaining_in_shard, target_take)
+                if shard_take_limit <= 0:
+                    raise RuntimeError(
+                        f"Invalid shard_take_limit={shard_take_limit} for {shard_path.name}; "
+                        "pool refill accounting is inconsistent."
+                    )
+
                 # Add positions to pool (with explicit copying to break shared array references).
                 # Also drop metadata fields to keep memory overhead lower.
                 first_copy_checked = False  # Track if we've checked the first copy for diagnostics
                 shard_positions_added = 0
-                for relative_idx, example in enumerate(file_examples[shard_offset:]):
-                    if positions_added >= positions_needed:
-                        break
+                for relative_idx, example in enumerate(file_examples[shard_offset:shard_offset + shard_take_limit]):
                     example_idx = shard_offset + relative_idx
                     source_ref: PositionSourceRef = (
                         selected_dir_idx,
@@ -1092,6 +1153,7 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
                         first_copy_checked = True
                     
                     self.position_pool.append(example_copy)
+                    self.pool_position_counts_by_dir[selected_dir_idx] += 1
                     positions_added += 1
                     shard_positions_added += 1
 
@@ -1161,7 +1223,8 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
     
     def _select_directory_for_loading(self) -> Optional[int]:
         """
-        Select which directory to load the next shard from based on proportional weights.
+        Select which directory to load next based on its current deficit in the
+        in-memory pool relative to the target directory weights.
         Returns the directory index, or None if no directories have available shards.
         """
         available_dirs = [i for i, queue in enumerate(self.shard_queues) if len(queue) > 0]
@@ -1169,34 +1232,13 @@ class StreamingMixedShardDataset(torch.utils.data.IterableDataset):
         if not available_dirs:
             return None
         
-        # If only one directory has shards, use it
         if len(available_dirs) == 1:
             return available_dirs[0]
-        
-        # Calculate current loading ratios for available directories
-        current_ratios = []
-        for dir_idx in available_dirs:
-            # Count how many shards we've loaded from this directory
-            loaded_from_dir = self.loaded_shard_counts[dir_idx]
-            # Treat a partially consumed head shard as progress for balancing.
-            partial_shard_in_progress = 0
-            if self.current_shard_offsets[dir_idx] > 0:
-                partial_shard_in_progress = 1
-            total_shards_in_dir = len(self.shard_queues[dir_idx]) + loaded_from_dir
-            effective_loaded = loaded_from_dir + partial_shard_in_progress
-            
-            if total_shards_in_dir > 0:
-                current_ratio = effective_loaded / total_shards_in_dir
-            else:
-                current_ratio = 0.0
-            
-            current_ratios.append(current_ratio)
-        
-        # Find directory that's furthest behind its target weight
-        target_ratios = [self.directory_weights[i] for i in available_dirs]
-        deficits = [target - current for target, current in zip(target_ratios, current_ratios)]
-        
-        # Select directory with largest deficit
+
+        target_pool_counts = [self.directory_weights[i] * self.pool_size for i in available_dirs]
+        current_pool_counts = [self.pool_position_counts_by_dir[i] for i in available_dirs]
+        deficits = [target - current for target, current in zip(target_pool_counts, current_pool_counts)]
+
         max_deficit_idx = max(range(len(deficits)), key=lambda i: deficits[i])
         return available_dirs[max_deficit_idx]
     
@@ -1433,7 +1475,7 @@ def discover_training_data_files_by_shards(data_dir: str, shard_numbers: List[in
 # ============================================================================
 
 # Configuration constants for data shuffling
-DEFAULT_NUM_BUCKETS = 500
+DEFAULT_NUM_BUCKETS = 150
 BUCKET_ID_FORMAT_WIDTH = 4  # For :04d format in filenames
 
 
