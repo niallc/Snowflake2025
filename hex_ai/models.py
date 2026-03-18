@@ -82,6 +82,24 @@ def _mean_max_pool2d(x: torch.Tensor) -> torch.Tensor:
     return torch.cat([mean_pooled, max_pooled], dim=1)
 
 
+def _kata_gpool2d(x: torch.Tensor) -> torch.Tensor:
+    """
+    Approximate KataGo/KataHex trunk/policy pooled statistics for square boards.
+
+    For fixed board size the scaled-mean term is linearly dependent on the mean,
+    but we keep the upstream three-stat structure for architectural fidelity.
+    """
+    board_rows = int(x.shape[-2])
+    board_cols = int(x.shape[-1])
+    if board_rows != board_cols:
+        raise ValueError(f"Expected square features for Kata gpool, got {tuple(x.shape)}")
+    mean_pooled = x.mean(dim=(2, 3))
+    max_pooled = torch.amax(x, dim=(2, 3))
+    sqrt_offset = (float(board_rows) - 14.0) / 10.0
+    scaled_mean = mean_pooled * sqrt_offset
+    return torch.cat([mean_pooled, scaled_mean, max_pooled], dim=1)
+
+
 class ResNetBlock(nn.Module):
     """
     Standard ResNet block with two convolutional layers and residual connection.
@@ -120,42 +138,6 @@ class ResNetBlock(nn.Module):
         out += self.shortcut(x)
         out = F.relu(out)
         
-        return out
-
-
-class BottleneckResNetBlock(nn.Module):
-    """
-    Constant-width residual block with a narrower internal bottleneck.
-
-    This keeps full board resolution while reducing the expensive 3x3 compute,
-    which is the main efficiency lesson we want to test from the Gumbel appendix.
-    """
-
-    def __init__(self, channels: int, bottleneck_channels: int):
-        super().__init__()
-        self.conv1 = nn.Conv2d(
-            channels, bottleneck_channels, kernel_size=1, bias=False
-        )
-        self.bn1 = nn.BatchNorm2d(bottleneck_channels)
-        self.conv2 = nn.Conv2d(
-            bottleneck_channels,
-            bottleneck_channels,
-            kernel_size=3,
-            padding=1,
-            bias=False,
-        )
-        self.bn2 = nn.BatchNorm2d(bottleneck_channels)
-        self.conv3 = nn.Conv2d(
-            bottleneck_channels, channels, kernel_size=1, bias=False
-        )
-        self.bn3 = nn.BatchNorm2d(channels)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = F.relu(self.bn2(self.conv2(out)))
-        out = self.bn3(self.conv3(out))
-        out += x
-        out = F.relu(out)
         return out
 
 
@@ -207,26 +189,75 @@ class GlobalPoolingResidualBlock(nn.Module):
         return out
 
 
-class BottleneckGlobalPoolingResidualBlock(nn.Module):
+class NestedBottleneckResidualBlock(nn.Module):
     """
-    Gpool residual block with a bottlenecked local path.
+    Nested bottleneck block closer to KataHex `bottlenest2` than a plain 1-3-1 block.
+    """
 
-    The local path is compute-reduced while the global bias path stays aligned
-    with the current live architecture so we change one main variable at a time.
+    def __init__(self, channels: int, bottleneck_channels: int):
+        super().__init__()
+        self.mix1_in = nn.Conv2d(
+            channels, bottleneck_channels, kernel_size=1, bias=False
+        )
+        self.bn_in = nn.BatchNorm2d(bottleneck_channels)
+        self.subblock1 = ResNetBlock(bottleneck_channels, bottleneck_channels)
+        self.subblock2 = ResNetBlock(bottleneck_channels, bottleneck_channels)
+        self.mix1_out = nn.Conv2d(
+            bottleneck_channels, channels, kernel_size=1, bias=False
+        )
+        self.bn_out = nn.BatchNorm2d(channels)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = F.relu(self.bn_in(self.mix1_in(x)))
+        out = self.subblock1(out)
+        out = self.subblock2(out)
+        out = self.bn_out(self.mix1_out(out))
+        return F.relu(x + out)
+
+
+class BottleneckPooledBiasResidualBlock(nn.Module):
+    """
+    Nested bottleneck block with a KataGo/KataHex-style gpool sub-block.
+
+    This replaces the older pooled-bias-only special block with:
+    - a real local 3x3 path in the special sub-block
+    - a separate 3x3 gpool branch
+    - upstream-style three-stat gpool features
     """
 
     def __init__(
         self,
         channels: int,
         bottleneck_channels: int,
-        gpool_channels: int = 16,
+        gpool_channels: int | None = None,
     ):
         super().__init__()
+        if gpool_channels is None:
+            gpool_channels = max(16, channels // 4)
+        self.gpool_channels = int(gpool_channels)
 
-        self.conv1 = nn.Conv2d(
+        self.mix1_in = nn.Conv2d(
             channels, bottleneck_channels, kernel_size=1, bias=False
         )
-        self.bn1 = nn.BatchNorm2d(bottleneck_channels)
+        self.bn_in = nn.BatchNorm2d(bottleneck_channels)
+
+        self.conv1_local = nn.Conv2d(
+            bottleneck_channels,
+            bottleneck_channels,
+            kernel_size=3,
+            padding=1,
+            bias=False,
+        )
+        self.bn1_local = nn.BatchNorm2d(bottleneck_channels)
+        self.conv1_gpool = nn.Conv2d(
+            bottleneck_channels,
+            self.gpool_channels,
+            kernel_size=3,
+            padding=1,
+            bias=False,
+        )
+        self.bn1_gpool = nn.BatchNorm2d(self.gpool_channels)
+        self.gpool_fc = nn.Linear(self.gpool_channels * 3, bottleneck_channels)
         self.conv2 = nn.Conv2d(
             bottleneck_channels,
             bottleneck_channels,
@@ -235,59 +266,25 @@ class BottleneckGlobalPoolingResidualBlock(nn.Module):
             bias=False,
         )
         self.bn2 = nn.BatchNorm2d(bottleneck_channels)
-        self.conv3 = nn.Conv2d(
-            bottleneck_channels, channels, kernel_size=1, bias=False
-        )
-        self.bn3 = nn.BatchNorm2d(channels)
 
-        self.gconv = nn.Conv2d(channels, gpool_channels, kernel_size=1, bias=False)
-        self.gbn = nn.BatchNorm2d(gpool_channels)
-        self.fc = nn.Linear(gpool_channels, channels)
-        self.g_alpha = nn.Parameter(torch.zeros(1))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        local = F.relu(self.bn1(self.conv1(x)))
-        local = F.relu(self.bn2(self.conv2(local)))
-        local = self.bn3(self.conv3(local))
-
-        g = self.gbn(self.gconv(x))
-        g = g.mean(dim=(2, 3))
-        g = self.fc(g).unsqueeze(-1).unsqueeze(-1)
-
-        out = F.relu(x + local + self.g_alpha * g)
-        return out
-
-
-class BottleneckPooledBiasResidualBlock(nn.Module):
-    """
-    Bottlenecked pooled-bias residual block using mean+max global statistics.
-
-    This keeps the block board-size-friendly and cheaper than a full 3x3
-    residual block while still injecting whole-board context.
-    """
-
-    def __init__(self, channels: int, bottleneck_channels: int):
-        super().__init__()
-        self.mix1_a = nn.Conv2d(
-            channels, bottleneck_channels, kernel_size=1, bias=False
-        )
-        self.bn_a = nn.BatchNorm2d(bottleneck_channels)
-        self.mix1_b = nn.Conv2d(
-            channels, bottleneck_channels, kernel_size=1, bias=False
-        )
-        self.bn_b = nn.BatchNorm2d(bottleneck_channels)
-        self.fc = nn.Linear(bottleneck_channels * 2, bottleneck_channels)
+        self.subblock2 = ResNetBlock(bottleneck_channels, bottleneck_channels)
         self.mix1_out = nn.Conv2d(
             bottleneck_channels, channels, kernel_size=1, bias=False
         )
         self.bn_out = nn.BatchNorm2d(channels)
-        self.g_alpha = nn.Parameter(torch.zeros(1))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        a = self.bn_a(self.mix1_a(x))
-        b = self.bn_b(self.mix1_b(x))
-        bias = self.fc(_mean_max_pool2d(b)).unsqueeze(-1).unsqueeze(-1)
-        out = F.relu(a + self.g_alpha * bias)
+        out = F.relu(self.bn_in(self.mix1_in(x)))
+
+        sub_residual = out
+        local = F.relu(self.bn1_local(self.conv1_local(out)))
+        g = F.relu(self.bn1_gpool(self.conv1_gpool(out)))
+        g = self.gpool_fc(_kata_gpool2d(g)).unsqueeze(-1).unsqueeze(-1)
+        fused = local + g
+        out = self.bn2(self.conv2(fused))
+        out = F.relu(sub_residual + out)
+
+        out = self.subblock2(out)
         out = self.bn_out(self.mix1_out(out))
         return F.relu(x + out)
 
@@ -394,7 +391,7 @@ class PolicyHead(PolicyHeadBase):
 
 
 class PooledBiasPolicyHead(PolicyHeadBase):
-    """Lightweight 1x1 pooled-bias policy head using mean+max statistics."""
+    """KataGo/KataHex-style lightweight 1x1 policy head with three-stat gpool."""
 
     def __init__(
         self,
@@ -417,20 +414,19 @@ class PooledBiasPolicyHead(PolicyHeadBase):
             trunk_channels, gpool_channels, kernel_size=1, bias=False
         )
         self.gbn = nn.BatchNorm2d(gpool_channels)
-        self.fc = nn.Linear(gpool_channels * 2, policy_channels)
+        self.fc = nn.Linear(gpool_channels * 3, policy_channels)
         self.combine_bn = nn.BatchNorm2d(policy_channels)
         self.conv2 = nn.Conv2d(policy_channels, 1, kernel_size=1, bias=False)
-        self.g_alpha = nn.Parameter(torch.zeros(1))
 
         self._initialize_final_layer()
 
     def forward(self, x: torch.Tensor, batch_idx: int = None) -> torch.Tensor:
         local = self.bn1(self.conv1(x))
 
-        g = self.gbn(self.gconv(x))
-        bias = self.fc(_mean_max_pool2d(g)).unsqueeze(-1).unsqueeze(-1)
+        g = F.relu(self.gbn(self.gconv(x)))
+        bias = self.fc(_kata_gpool2d(g)).unsqueeze(-1).unsqueeze(-1)
 
-        local = F.relu(self.combine_bn(local + self.g_alpha * bias))
+        local = F.relu(self.combine_bn(local + bias))
 
         if self.training and batch_idx is not None and batch_idx % 50 == 0:
             self._monitor_stability(local, batch_idx)
@@ -904,52 +900,9 @@ class TwoHeadedResNet(nn.Module):
         return self.forward_value_only(boards, move_stage)
 
 
-class TwoHeadedBottleneckResNet(TwoHeadedResNet):
-    """
-    Bottleneck-trunk variant of the current KataGo-inspired family.
-
-    It keeps the same stem, heads, full board resolution, and periodic global
-    pooling pattern, but makes the trunk blocks cheaper so we can test deeper
-    or wider challengers without paying the full cost of plain full-width blocks.
-    """
-
-    def __init__(
-        self,
-        num_blocks: int = 9,
-        trunk_channels: int = 128,
-        board_size: int = BOARD_SIZE,
-    ):
-        super().__init__(
-            num_blocks=num_blocks,
-            trunk_channels=trunk_channels,
-            board_size=board_size,
-        )
-        self.model_type = "katago_bottleneck"
-        self.bottleneck_channels = max(1, trunk_channels // 2)
-
-        blocks = []
-        for i in range(num_blocks):
-            if i in self.global_block_indices:
-                blocks.append(
-                    BottleneckGlobalPoolingResidualBlock(
-                        trunk_channels,
-                        bottleneck_channels=self.bottleneck_channels,
-                    )
-                )
-            else:
-                blocks.append(
-                    BottleneckResNetBlock(
-                        trunk_channels,
-                        bottleneck_channels=self.bottleneck_channels,
-                    )
-                )
-        self.trunk = nn.Sequential(*blocks)
-        self._initialize_weights()
-
-
 class TwoHeadedBottleneckPoolResNet(TwoHeadedResNet):
     """
-    Bottleneck family with sparse pooled-bias trunk blocks and cheaper pooled heads.
+    Bottleneck family closer to KataHex bottlenest + gpool structure.
     """
 
     def __init__(
@@ -958,10 +911,10 @@ class TwoHeadedBottleneckPoolResNet(TwoHeadedResNet):
         trunk_channels: int = 224,
         board_size: int = BOARD_SIZE,
     ):
-        if num_blocks < 9:
+        if num_blocks < 6:
             raise ValueError(
-                "katago_bottleneck_pool requires num_blocks >= 9 so pooled-bias "
-                "blocks can remain at 1-indexed positions 4 and 9."
+                "katago_bottleneck_pool requires num_blocks >= 6 so the trunk "
+                "can include periodic gpool bottleneck blocks."
             )
         super().__init__(
             num_blocks=num_blocks,
@@ -970,7 +923,8 @@ class TwoHeadedBottleneckPoolResNet(TwoHeadedResNet):
         )
         self.model_type = "katago_bottleneck_pool"
         self.bottleneck_channels = max(1, trunk_channels // 2)
-        self.global_block_indices = (3, 8)
+        self.gpool_channels = max(16, trunk_channels // 4)
+        self.global_block_indices = tuple(i for i in range(num_blocks) if i % 3 == 2)
 
         blocks = []
         for i in range(num_blocks):
@@ -979,11 +933,12 @@ class TwoHeadedBottleneckPoolResNet(TwoHeadedResNet):
                     BottleneckPooledBiasResidualBlock(
                         trunk_channels,
                         bottleneck_channels=self.bottleneck_channels,
+                        gpool_channels=self.gpool_channels,
                     )
                 )
             else:
                 blocks.append(
-                    BottleneckResNetBlock(
+                    NestedBottleneckResidualBlock(
                         trunk_channels,
                         bottleneck_channels=self.bottleneck_channels,
                     )
@@ -1005,30 +960,6 @@ class TwoHeadedBottleneckPoolResNet(TwoHeadedResNet):
         self._initialize_weights()
 
 
-class TwoHeadedBottleneckPool3x3PolicyResNet(TwoHeadedBottleneckPoolResNet):
-    """
-    Bottleneck-pool trunk/value family with the older richer 3x3 policy head.
-
-    This is a practical head-only A/B against the lighter pooled-bias head while
-    keeping the same trunk block layout and value-head semantics.
-    """
-
-    def __init__(
-        self,
-        num_blocks: int = 13,
-        trunk_channels: int = 224,
-        board_size: int = BOARD_SIZE,
-    ):
-        super().__init__(
-            num_blocks=num_blocks,
-            trunk_channels=trunk_channels,
-            board_size=board_size,
-        )
-        self.model_type = "katago_bottleneck_pool_3x3_policy"
-        self.policy_head = PolicyHead(trunk_channels, self.board_size)
-        self._initialize_weights()
-
-
 @dataclass(frozen=True)
 class ModelFamilyDefinition:
     """Registry entry describing one supported model family."""
@@ -1044,18 +975,8 @@ MODEL_FAMILY_REGISTRY: Dict[str, ModelFamilyDefinition] = {
         default_num_blocks=7,
         default_trunk_channels=128,
     ),
-    "katago_bottleneck": ModelFamilyDefinition(
-        model_class=TwoHeadedBottleneckResNet,
-        default_num_blocks=9,
-        default_trunk_channels=128,
-    ),
     "katago_bottleneck_pool": ModelFamilyDefinition(
         model_class=TwoHeadedBottleneckPoolResNet,
-        default_num_blocks=13,
-        default_trunk_channels=224,
-    ),
-    "katago_bottleneck_pool_3x3_policy": ModelFamilyDefinition(
-        model_class=TwoHeadedBottleneckPool3x3PolicyResNet,
         default_num_blocks=13,
         default_trunk_channels=224,
     ),
@@ -1154,7 +1075,7 @@ def get_model_summary(model: nn.Module) -> str:
         policy_output_size = board_size * board_size
         global_block_indices = tuple(getattr(model, "global_block_indices", ()))
         global_block_count = len(global_block_indices)
-        plain_blocks = model.num_blocks - global_block_count
+        non_global_blocks = model.num_blocks - global_block_count
         k_outputs = model.value_head.k_outputs
         bottleneck_channels = getattr(model, "bottleneck_channels", None)
         model_variant = f"{model.__class__.__name__} ({getattr(model, 'model_type', 'unknown')})"
@@ -1168,16 +1089,21 @@ def get_model_summary(model: nn.Module) -> str:
         value_pool_label = "mean + max" if value_pool_mode == "mean_max" else "global mean"
         if global_block_indices:
             global_block_label = (
-                f"{global_block_count} pooled-bias blocks at 1-indexed positions "
+                f"{global_block_count} bottleneck gpool blocks at 1-indexed positions "
                 f"{[idx + 1 for idx in global_block_indices]}"
                 if isinstance(model, TwoHeadedBottleneckPoolResNet)
                 else f"{global_block_count} global pooling blocks (every 3rd block)"
             )
         else:
             global_block_label = "0 global-context blocks"
+        local_block_label = (
+            f"{non_global_blocks} nested bottleneck blocks"
+            if isinstance(model, TwoHeadedBottleneckPoolResNet)
+            else f"{non_global_blocks} plain ResNet blocks"
+        )
         policy_head = getattr(model, "policy_head", None)
         if isinstance(policy_head, PooledBiasPolicyHead):
-            policy_head_label = "1x1 pooled-bias policy head"
+            policy_head_label = "1x1 + KataGPool-bias policy head"
         elif isinstance(policy_head, PolicyHead):
             policy_head_label = "3x3 + global-bias + LayerNorm policy head"
         else:
@@ -1192,7 +1118,7 @@ Model Type: {model_variant}
 Architecture:
 - Input: (batch_size, 3, {board_size}, {board_size}) [{spatial_shape}]
 {trunk_line}
-  * {plain_blocks} plain ResNet blocks
+  * {local_block_label}
   * {global_block_label}
 - Policy Head: {policy_head_label}
 - Value Head: Stage-conditioned multi-output ensemble ({k_outputs} outputs) with {value_pool_label} pooling
