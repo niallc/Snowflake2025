@@ -46,29 +46,6 @@ PositionSourceRef = Tuple[int, str, int]  # (dir_idx, shard_filename, example_id
 PositionPoolEntry = Tuple[Any, Any, Any, Any, Optional[PositionSourceRef]]
 
 
-def shuffle_data_files(data_files: List[Path], shuffle_shards: bool = True, random_seed: Optional[int] = None) -> List[Path]:
-    """
-    Utility function to shuffle data files consistently.
-    
-    Args:
-        data_files: List of data file paths
-        shuffle_shards: Whether to shuffle the shards
-        random_seed: Random seed for reproducible shuffling
-        
-    Returns:
-        List of data file paths (shuffled if requested)
-    """
-    if not shuffle_shards:
-        return data_files
-    
-    if random_seed is not None:
-        random.seed(random_seed)
-    
-    shuffled_files = data_files.copy()
-    random.shuffle(shuffled_files)
-    return shuffled_files
-
-
 class ShardLogger:
     """
     Tracks and logs data shard transitions during training.
@@ -1778,9 +1755,9 @@ class DataShuffler:
     def _validate_output(self):
         """Validate the shuffled output data.
         
-        Currently only counts total examples to verify no data was lost.
-        The distribution is guaranteed to be even by construction (≤169 moves per game,
-        {self.num_buckets} buckets), so no distribution validation is needed.
+        Currently this only checks for data loss. The striping step reduces
+        within-file locality, but it does not guarantee uniform shard
+        distributions, so distribution skew must be investigated separately.
         """
         if not self.validation_enabled:
             return

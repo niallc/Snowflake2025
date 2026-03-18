@@ -260,7 +260,6 @@ Examples:
         ),
     )
     parser.add_argument("--random_seed", type=int, default=42, help="Random seed for reproducible results")
-    parser.add_argument("--no_shuffle_shards", action="store_true", help="Disable shuffling of data shards before train/val split (shards will be used in sorted order)")
     
     args = parser.parse_args()
 
@@ -447,7 +446,6 @@ Examples:
             shutdown_handler=shutdown_handler,
             run_timestamp=RUN_TIMESTAMP,
             override_checkpoint_hyperparameters=args.override_checkpoint_hyperparameters,
-            shuffle_shards=not args.no_shuffle_shards
         )
         total_time = time.time() - start_time
         print(f"\nTotal time: {total_time:.1f}s ({total_time/60:.1f} minutes)")

@@ -48,7 +48,7 @@ from hex_ai.model_spec import resolve_model_spec_for_checkpoint_path
 # Script imports (moved to top level)
 from hex_ai.data_collection import combine_and_clean_files, collect_and_organize_data
 from hex_ai.validation_defaults import resolve_validation_config, log_validation_summary
-from hex_ai.data_pipeline import DataShuffler
+from hex_ai.data_pipeline import DataShuffler, DEFAULT_NUM_BUCKETS
 from hex_ai.memory_profiler import start_profiling, take_snapshot, stop_profiling
 
 # TODO(2026-03): Switch default provenance mode to "require" after rollout.
@@ -92,7 +92,7 @@ class PipelineConfig:
     position_selector: str = "all"
     policy_provenance_mode: str = DEFAULT_POLICY_PROVENANCE_MODE
     max_workers_trmph: int = 6
-    num_buckets_shuffle: int = 100
+    num_buckets_shuffle: int = DEFAULT_NUM_BUCKETS
     
     # Training configuration
     max_samples: int = 35000000
@@ -858,7 +858,6 @@ class TrainingStep:
             shutdown_handler=shutdown_handler,
             run_timestamp=self.config.run_timestamp,
             override_checkpoint_hyperparameters=self.config.override_checkpoint_hyperparameters,
-            shuffle_shards=True,
             max_mini_epochs=max_mini_epochs,
             resume_mode=resume_mode,
             target_end_epoch=target_end_epoch,
@@ -1636,7 +1635,12 @@ Examples:
         ),
     )
     parser.add_argument("--max-workers-trmph", type=int, default=6, help="Max workers for TRMPH processing")
-    parser.add_argument("--num-buckets-shuffle", type=int, default=100, help="Number of buckets for shuffling")
+    parser.add_argument(
+        "--num-buckets-shuffle",
+        type=int,
+        default=DEFAULT_NUM_BUCKETS,
+        help="Number of buckets for shuffling",
+    )
     
     # Training configuration
     parser.add_argument("--max-samples", type=int, default=35000000, help="Max training samples")

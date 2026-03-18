@@ -688,7 +688,6 @@ def run_hyperparameter_tuning_current_data(
     warm_start_from: Optional[str] = None,  # Fresh-lineage warm start from checkpoint file
     warm_start_excluded_prefixes: Optional[List[str]] = None,
     shard_ranges: Optional[List[str]] = None,  # Shard ranges for each directory (e.g., ["251-300", "all"])
-    shuffle_shards: bool = True,  # Control whether to shuffle data shards
     pool_size: int = DEFAULT_POOL_SIZE,  # Pool size for mixed dataset
     refill_threshold: int = DEFAULT_REFILL_THRESHOLD,  # Refill threshold for mixed dataset
     max_memory_gb: float = DEFAULT_MAX_MEMORY_GB,  # Memory limit for mixed dataset
@@ -727,7 +726,6 @@ def run_hyperparameter_tuning_current_data(
         warm_start_excluded_prefixes: Optional module prefixes to exclude from
             warm-start loading.
         shard_ranges: Optional list of shard ranges for each directory (e.g., ["251-300", "all"])
-        shuffle_shards: Whether to shuffle data shards before train/val split (default: True)
         pool_size: Target number of positions to maintain in memory (default: 1M)
         refill_threshold: Refill pool when it drops below this many positions (default: 750K)
         max_memory_gb: Maximum memory usage before graceful shutdown (default: 5.0)
