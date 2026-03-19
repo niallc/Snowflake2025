@@ -22,7 +22,6 @@ from hex_ai.value_utils import (
 )
 from hex_ai.enums import Piece, Player
 from hex_ai.inference.mcts_utils import (
-    compute_win_probability_from_tree_data,
     compute_best_child_win_probability_from_tree_data,
 )
 from hex_ai.config import BOARD_SIZE, TRMPH_BLUE_WIN, TRMPH_RED_WIN, FIXED_TREE_MAX_PRODUCT, FIXED_TREE_DEFAULT_WIDTH, FIXED_TREE_DEFAULT_TEMPERATURE
@@ -823,9 +822,7 @@ def _build_mcts_debug_info(
 ):
     """Assemble MCTS diagnostics payload."""
     algorithm = _resolve_mcts_algorithm_label(stats, algorithm_termination_info)
-    root_win_prob = compute_win_probability_from_tree_data(tree_data)
     best_child_value_available = bool(tree_data.get("best_child_value_available", True))
-    best_child_signed_value = tree_data["v_ptm_ref_signed_best_child"]
     best_child_win_prob = (
         compute_best_child_win_probability_from_tree_data(tree_data)
         if best_child_value_available
@@ -860,8 +857,16 @@ def _build_mcts_debug_info(
     )
 
     app.logger.debug(
-        f"Value conversion: root_prob={root_win_prob:.3f}, "
-        f"best_child_signed={best_child_signed_value:.3f} -> best_child_prob={best_child_win_prob_str}"
+        "Value conversion: selected_move_search=%s, best_child_prob=%s, "
+        "root_value_head=%0.3f, selected_move_value_head=%0.3f",
+        (
+            f"{selected_move_search_win_prob:.3f}"
+            if selected_move_search_win_prob is not None
+            else "N/A"
+        ),
+        best_child_win_prob_str,
+        root_value_head_win_prob,
+        selected_move_value_head_win_prob,
     )
     if algorithm_termination_info:
         app.logger.debug(
@@ -918,23 +923,13 @@ def _build_mcts_debug_info(
             "mcts_vs_direct": {},
         },
         "win_rate_analysis": {
-            "root_value": tree_data["v_ptm_ref_signed_root"],
-            "root_value_source": tree_data.get("root_value_source", "tree_visits"),
-            "root_network_value": root_value_head_signed,
             "root_network_win_probability": root_value_head_win_prob,
             "selected_move": selected_move_trmph,
-            "selected_move_search_value": selected_move_search_signed_value,
             "selected_move_search_value_available": selected_move_search_signed_value is not None,
             "selected_move_search_win_probability": selected_move_search_win_prob,
-            "selected_move_value_head_value": selected_move_value_head_signed,
             "selected_move_value_head_win_probability": selected_move_value_head_win_prob,
-            "best_child_value": tree_data["v_ptm_ref_signed_best_child"],
-            "best_child_value_source": tree_data.get(
-                "best_child_value_source", "tree_children"
-            ),
             "best_child_value_available": best_child_value_available,
             "best_child_move": best_child_move,
-            "win_probability": root_win_prob,
             "best_child_win_probability": best_child_win_prob,
         },
         "move_sequence_analysis": {

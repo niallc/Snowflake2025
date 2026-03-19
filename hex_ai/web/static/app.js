@@ -2039,9 +2039,7 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
   if (mctsDebugInfo.win_rate_analysis) {
     output += '=== WIN RATE ANALYSIS ===\n';
     const winRate = mctsDebugInfo.win_rate_analysis;
-    const rootValueSource = winRate.root_value_source || 'tree_visits';
     const rootBoardWinProb = winRate.root_network_win_probability;
-    const aggregateRootWinProb = winRate.win_probability;
     const selectedMoveSearchWinProb = winRate.selected_move_search_win_probability;
     const selectedMoveValueHeadWinProb = winRate.selected_move_value_head_win_probability;
     const bestChildWinProb = winRate.best_child_win_probability;
@@ -2049,15 +2047,6 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
 
     if (rootBoardWinProb !== null && rootBoardWinProb !== undefined) {
       output += `Current Board Win Probability (Value Head): ${formatProbAsPercent(rootBoardWinProb, 2)}\n`;
-    }
-
-    if (rootValueSource === 'tree_visits' || rootValueSource === 'terminal_move_shortcut') {
-      output += `Aggregate Root Search Win Probability: ${formatProbAsPercent(aggregateRootWinProb, 2)}\n`;
-      output += '  Mean root value across explored root actions; not the chosen move score.\n';
-    } else if (rootValueSource !== 'root_network_eval'
-        && aggregateRootWinProb !== null
-        && aggregateRootWinProb !== undefined) {
-      output += `Root Search Win Probability: ${formatProbAsPercent(aggregateRootWinProb, 2)}\n`;
     }
 
     if (winRate.selected_move_search_value_available === false) {
