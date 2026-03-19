@@ -384,6 +384,7 @@ def format_mcts_tree_data_for_api(
     _assert_matching_board_sizes(_get_board_size_from_state(root_node.state), board_size)
     visit_counts = {}
     mcts_probabilities = {}
+    child_q_ptm_ref_signed = {}
     total_visits = int(np.sum(root_node.N))
     
     # Check if this is a terminal move shortcut case (no visits but terminal moves detected)
@@ -395,10 +396,12 @@ def format_mcts_tree_data_for_api(
                 # Terminal move gets 100% probability and 1 visit
                 visit_counts[move_trmph] = 1
                 mcts_probabilities[move_trmph] = 1.0
+                child_q_ptm_ref_signed[move_trmph] = 1.0
             else:
                 # Non-terminal moves get 0 probability and 0 visits
                 visit_counts[move_trmph] = 0
                 mcts_probabilities[move_trmph] = 0.0
+                child_q_ptm_ref_signed[move_trmph] = None
         total_visits = 1  # Set to 1 to indicate one "virtual" visit
     else:
         # Normal MCTS case - use actual visit counts
@@ -406,6 +409,9 @@ def format_mcts_tree_data_for_api(
             move_trmph = rowcol_to_trmph(int(row), int(col), board_size)
             visits = int(root_node.N[i])
             visit_counts[move_trmph] = visits
+            child_q_ptm_ref_signed[move_trmph] = (
+                float(root_node.Q[i]) if visits > 0 else None
+            )
             
             # Calculate MCTS probability (visit count / total visits)
             if total_visits > 0:
@@ -416,6 +422,7 @@ def format_mcts_tree_data_for_api(
     root_value_source = "tree_visits"
     best_child_value_source = "tree_children"
     best_child_value_available = False
+    best_child_move = None
 
     # Get root value (average value of all children) - in player-to-move reference frame.
     # When no visits exist yet but the root has been evaluated, use the cached root
@@ -432,9 +439,22 @@ def format_mcts_tree_data_for_api(
         v_ptm_ref_signed_root = 0.0
         root_value_source = "unavailable_no_visits"
 
-    # Get best child value - in player-to-move reference frame
-    if total_visits > 0 and len(root_node.Q) > 0:
-        v_ptm_ref_signed_best_child = float(np.max(root_node.Q))
+    # Get best explored child value - in player-to-move reference frame.
+    visited_child_indices = [
+        i for i, visits in enumerate(root_node.N) if int(visits) > 0
+    ]
+    if visited_child_indices:
+        best_child_idx = max(
+            visited_child_indices,
+            key=lambda idx: float(root_node.Q[idx]),
+        )
+        best_child_move_row, best_child_move_col = root_node.legal_moves[best_child_idx]
+        best_child_move = rowcol_to_trmph(
+            int(best_child_move_row),
+            int(best_child_move_col),
+            board_size,
+        )
+        v_ptm_ref_signed_best_child = float(root_node.Q[best_child_idx])
         best_child_value_available = True
     else:
         v_ptm_ref_signed_best_child = 0.0
@@ -443,6 +463,14 @@ def format_mcts_tree_data_for_api(
     # For terminal move shortcut case, set appropriate values
     if total_visits == 1 and hasattr(root_node, 'terminal_moves') and any(root_node.terminal_moves):
         # Terminal move means guaranteed win for current player
+        best_child_move = next(
+            (
+                rowcol_to_trmph(int(row), int(col), board_size)
+                for i, (row, col) in enumerate(root_node.legal_moves)
+                if root_node.terminal_moves[i]
+            ),
+            None,
+        )
         v_ptm_ref_signed_root = 1.0  # +1 = current player wins
         v_ptm_ref_signed_best_child = 1.0  # +1 = current player wins
         root_value_source = "terminal_move_shortcut"
@@ -461,11 +489,13 @@ def format_mcts_tree_data_for_api(
     result = {
         "visit_counts": visit_counts,
         "mcts_probabilities": mcts_probabilities,
+        "child_q_ptm_ref_signed": child_q_ptm_ref_signed,
         "v_ptm_ref_signed_root": v_ptm_ref_signed_root,
         "v_ptm_ref_signed_best_child": v_ptm_ref_signed_best_child,
         "root_value_source": root_value_source,
         "best_child_value_source": best_child_value_source,
         "best_child_value_available": best_child_value_available,
+        "best_child_move": best_child_move,
         "total_visits": total_visits,
         "inferences": total_inferences,
         "total_nodes": total_nodes,

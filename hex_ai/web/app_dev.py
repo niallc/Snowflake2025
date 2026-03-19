@@ -14,9 +14,11 @@ from hex_ai.inference.game_engine import apply_move_to_state_trmph
 
 from hex_ai.inference.fixed_tree_search import run_fixed_tree_search, create_fixed_tree_config
 from hex_ai.value_utils import (
+    ValuePredictor,
     policy_logits_to_probs,
     get_legal_policy_probs,
     select_policy_move,
+    signed_to_prob,
 )
 from hex_ai.enums import Piece, Player
 from hex_ai.inference.mcts_utils import (
@@ -754,7 +756,7 @@ def _compute_direct_policy_analysis(state, model, trmph, temperature):
     top_moves_str = {move: f"{prob:.3f}" for move, prob in sorted_moves}
     app.logger.info(f"Top 10 legal move probabilities: {top_moves_str}")
 
-    return legal_move_probs, original_legal_moves_count
+    return legal_move_probs, original_legal_moves_count, float(value_output)
 
 
 def _apply_selected_move(state, selected_move_trmph):
@@ -804,8 +806,11 @@ def _build_mcts_debug_info(
     stats,
     tree_data,
     algorithm_termination_info,
+    root_player,
+    root_value_head_signed,
     selected_move_trmph,
     selected_move,
+    selected_move_value_head_signed,
     legal_move_probs,
     original_legal_moves_count,
     num_simulations,
@@ -824,6 +829,26 @@ def _build_mcts_debug_info(
     best_child_win_prob = (
         compute_best_child_win_probability_from_tree_data(tree_data)
         if best_child_value_available
+        else None
+    )
+    best_child_move = tree_data.get("best_child_move")
+    root_value_head_signed = float(root_value_head_signed)
+    root_value_head_win_prob = float(
+        ValuePredictor.get_win_probability(root_value_head_signed, root_player)
+    )
+    selected_move_value_head_signed = float(selected_move_value_head_signed)
+    selected_move_value_head_win_prob = float(
+        ValuePredictor.get_win_probability(selected_move_value_head_signed, root_player)
+    )
+    selected_move_search_signed_value = None
+    child_q_ptm_ref_signed = tree_data.get("child_q_ptm_ref_signed", {})
+    if isinstance(child_q_ptm_ref_signed, dict):
+        raw_selected_move_search_value = child_q_ptm_ref_signed.get(selected_move_trmph)
+        if raw_selected_move_search_value is not None:
+            selected_move_search_signed_value = float(raw_selected_move_search_value)
+    selected_move_search_win_prob = (
+        float(signed_to_prob(selected_move_search_signed_value))
+        if selected_move_search_signed_value is not None
         else None
     )
     algorithm_win_prob = (
@@ -895,11 +920,20 @@ def _build_mcts_debug_info(
         "win_rate_analysis": {
             "root_value": tree_data["v_ptm_ref_signed_root"],
             "root_value_source": tree_data.get("root_value_source", "tree_visits"),
+            "root_network_value": root_value_head_signed,
+            "root_network_win_probability": root_value_head_win_prob,
+            "selected_move": selected_move_trmph,
+            "selected_move_search_value": selected_move_search_signed_value,
+            "selected_move_search_value_available": selected_move_search_signed_value is not None,
+            "selected_move_search_win_probability": selected_move_search_win_prob,
+            "selected_move_value_head_value": selected_move_value_head_signed,
+            "selected_move_value_head_win_probability": selected_move_value_head_win_prob,
             "best_child_value": tree_data["v_ptm_ref_signed_best_child"],
             "best_child_value_source": tree_data.get(
                 "best_child_value_source", "tree_children"
             ),
             "best_child_value_available": best_child_value_available,
+            "best_child_move": best_child_move,
             "win_probability": root_win_prob,
             "best_child_win_probability": best_child_win_prob,
         },
@@ -1099,17 +1133,22 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
         selected_move_trmph = fc.rowcol_to_trmph(*selected_move)
         app.logger.info(f"Selected move TRMPH: {selected_move_trmph}")
 
-        legal_move_probs, original_legal_moves_count = _compute_direct_policy_analysis(
+        root_player = state.current_player_enum
+        legal_move_probs, original_legal_moves_count, root_value_head_signed = _compute_direct_policy_analysis(
             state, model, trmph, temperature
         )
         state = _apply_selected_move(state, selected_move_trmph)
+        _, selected_move_value_head_signed = model.simple_infer(state.to_trmph())
 
         mcts_debug_info = _build_mcts_debug_info(
             stats=stats,
             tree_data=tree_data,
             algorithm_termination_info=algorithm_termination_info,
+            root_player=root_player,
+            root_value_head_signed=root_value_head_signed,
             selected_move_trmph=selected_move_trmph,
             selected_move=selected_move,
+            selected_move_value_head_signed=float(selected_move_value_head_signed),
             legal_move_probs=legal_move_probs,
             original_legal_moves_count=original_legal_moves_count,
             num_simulations=num_simulations,
@@ -1338,7 +1377,7 @@ def make_fixed_tree_move(trmph, model_id, search_widths, temperature, verbose):
         selected_move_trmph = fc.rowcol_to_trmph(*search_result.move)
         app.logger.info(f"Selected move TRMPH: {selected_move_trmph}")
 
-        legal_move_probs, original_legal_moves_count = _compute_direct_policy_analysis(
+        legal_move_probs, original_legal_moves_count, _ = _compute_direct_policy_analysis(
             state, model, trmph, temperature
         )
         state = _apply_selected_move(state, selected_move_trmph)

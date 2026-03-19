@@ -2039,16 +2039,47 @@ function displayMCTSDebugInfo(mctsDebugInfo) {
   if (mctsDebugInfo.win_rate_analysis) {
     output += '=== WIN RATE ANALYSIS ===\n';
     const winRate = mctsDebugInfo.win_rate_analysis;
-    const rootValueLabel = winRate.root_value_source === 'root_network_eval'
-      ? 'Root Value (Root NN Eval)'
-      : 'Root Value';
-    output += `${rootValueLabel}: ${winRate.root_value.toFixed(4)}\n`;
-    if (winRate.best_child_value_available === false) {
-      output += 'Best Child Value: N/A (no child search)\n';
-    } else {
-      output += `Best Child Value: ${winRate.best_child_value.toFixed(4)}\n`;
+    const rootValueSource = winRate.root_value_source || 'tree_visits';
+    const rootBoardWinProb = winRate.root_network_win_probability;
+    const aggregateRootWinProb = winRate.win_probability;
+    const selectedMoveSearchWinProb = winRate.selected_move_search_win_probability;
+    const selectedMoveValueHeadWinProb = winRate.selected_move_value_head_win_probability;
+    const bestChildWinProb = winRate.best_child_win_probability;
+    const bestChildMove = winRate.best_child_move;
+
+    if (rootBoardWinProb !== null && rootBoardWinProb !== undefined) {
+      output += `Current Board Win Probability (Value Head): ${formatProbAsPercent(rootBoardWinProb, 2)}\n`;
     }
-    output += `Win Probability: ${(winRate.win_probability * 100).toFixed(2)}%\n\n`;
+
+    if (rootValueSource === 'tree_visits' || rootValueSource === 'terminal_move_shortcut') {
+      output += `Aggregate Root Search Win Probability: ${formatProbAsPercent(aggregateRootWinProb, 2)}\n`;
+      output += '  Mean root value across explored root actions; not the chosen move score.\n';
+    } else if (rootValueSource !== 'root_network_eval'
+        && aggregateRootWinProb !== null
+        && aggregateRootWinProb !== undefined) {
+      output += `Root Search Win Probability: ${formatProbAsPercent(aggregateRootWinProb, 2)}\n`;
+    }
+
+    if (winRate.selected_move_search_value_available === false) {
+      output += 'Chosen Move Win Probability (Search): N/A (move was not searched)\n';
+    } else if (selectedMoveSearchWinProb !== null && selectedMoveSearchWinProb !== undefined) {
+      output += `Chosen Move Win Probability (Search): ${formatProbAsPercent(selectedMoveSearchWinProb, 2)}\n`;
+    }
+
+    if (selectedMoveValueHeadWinProb !== null && selectedMoveValueHeadWinProb !== undefined) {
+      output += `Chosen Move Win Probability (Value Head): ${formatProbAsPercent(selectedMoveValueHeadWinProb, 2)}\n`;
+    }
+
+    if (
+      winRate.best_child_value_available !== false
+      && bestChildWinProb !== null
+      && bestChildWinProb !== undefined
+      && bestChildMove
+      && bestChildMove !== winRate.selected_move
+    ) {
+      output += `Best Explored Child Win Probability: ${formatProbAsPercent(bestChildWinProb, 2)} (${bestChildMove})\n`;
+    }
+    output += '\n';
   }
   
   // Gumbel Root Selection (if used)
