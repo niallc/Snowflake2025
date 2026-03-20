@@ -1353,10 +1353,7 @@ async function onCellClick(e) {
         displayPolicyInfo(computerResult.policy_info);
       }
       
-      // Display detailed exploration if tree_data exists
-      if (computerResult.tree_data) {
-        displayDetailedExploration({ tree_data: computerResult.tree_data });
-      }
+      updateDetailedExplorationFromResult(computerResult);
         
         const usedInlineHeatmap = applyInlineHeatmapFromResponse(computerResult);
         updateUI();
@@ -1424,10 +1421,7 @@ async function stepComputerMove() {
         displayPolicyInfo(result.policy_info);
       }
       
-      // Display detailed exploration if tree_data exists
-      if (result.tree_data) {
-        displayDetailedExploration({ tree_data: result.tree_data });
-      }
+      updateDetailedExplorationFromResult(result);
       
       const usedInlineHeatmap = applyInlineHeatmapFromResponse(result);
       updateUI();
@@ -1872,357 +1866,307 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // --- Debug Output Functions ---
 function displayAlgorithmInfo(debugInfo) {
-  if (!debugInfo || state.verbose_level === 0) return;
-  
-  const debugContent = document.getElementById('debug-content');
-  if (!debugContent) return;
-  
-  let output = '';
-  
-  // Algorithm identification (always show at top)
-  if (debugInfo.algorithm_info) {
-    const algo = debugInfo.algorithm_info;
-    output += '=== ALGORITHM USED ===\n';
-    output += `Algorithm: ${algo.algorithm}\n`;
-    
-    if (algo.early_termination) {
-      output += `Early Termination: YES (${algo.early_termination_reason})\n`;
-      
-      if (algo.early_termination_details && algo.early_termination_details.win_probability !== null && algo.early_termination_details.win_probability !== undefined) {
-        const details = algo.early_termination_details;
-        output += `Termination Win Probability: ${(details.win_probability * 100).toFixed(1)}%\n`;
-      }
+  if (!debugInfo || state.verbose_level === 0 || !debugInfo.algorithm_info) return '';
 
-      // Add specific information for terminal move detection
-      if (algo.early_termination_reason === 'terminal_move' && algo.early_termination_details) {
-        const details = algo.early_termination_details;
-        if (details.move) {
-          output += `Terminal Move: ${details.move[0]},${details.move[1]} (${String.fromCharCode(97 + details.move[1])}${details.move[0] + 1})\n`;
-        }
-      }
-    } else {
-      output += `Early Termination: NO\n`;
+  const algo = debugInfo.algorithm_info;
+  let output = '=== ALGORITHM ===\n';
+
+  const headline = [algo.algorithm || 'unknown'];
+  headline.push(algo.early_termination ? `early stop: ${algo.early_termination_reason}` : 'early stop: no');
+  output += `${headline.join(' | ')}\n`;
+
+  if (algo.early_termination && algo.early_termination_details) {
+    const details = algo.early_termination_details;
+    const detailParts = [];
+    if (details.win_probability !== null && details.win_probability !== undefined) {
+      detailParts.push(`win p: ${formatProbAsPercent(details.win_probability, 1)}`);
     }
-    
-    // Display algorithm-specific parameters
-    if (algo.parameters) {
-      output += `Parameters: `;
-      const paramStrings = [];
-      for (const [key, value] of Object.entries(algo.parameters)) {
-        if (Array.isArray(value)) {
-          paramStrings.push(`${key}=[${value.join(',')}]`);
-        } else {
-          paramStrings.push(`${key}=${value}`);
-        }
-      }
-      output += paramStrings.join(', ');
-      output += '\n';
+    if (Array.isArray(details.move) && details.move.length >= 2) {
+      const trmphMove = `${String.fromCharCode(97 + details.move[1])}${details.move[0] + 1}`;
+      detailParts.push(`move: ${trmphMove} (${details.move[0]},${details.move[1]})`);
     }
-    output += '\n';
+    if (detailParts.length > 0) {
+      output += `${detailParts.join(' | ')}\n`;
+    }
   }
-  
+
+  if (algo.parameters && Object.keys(algo.parameters).length > 0) {
+    const paramStrings = Object.entries(algo.parameters).map(([key, value]) => {
+      if (Array.isArray(value)) return `${key}=[${value.join(',')}]`;
+      return `${key}=${value}`;
+    });
+    output += `Params: ${paramStrings.join(', ')}\n`;
+  }
+
+  output += '\n';
   return output;
 }
 
 function shouldShowMCTSStats(mctsDebugInfo) {
-  // Determine if MCTS-specific statistics should be displayed.
   if (!mctsDebugInfo || !mctsDebugInfo.algorithm_info) return false;
-  
-  const algorithmUsed = mctsDebugInfo.algorithm_info.algorithm;
+
+  const algorithmUsed = String(mctsDebugInfo.algorithm_info.algorithm || '');
   const earlyTerminated = mctsDebugInfo.algorithm_info.early_termination;
-  
-  // Don't show MCTS stats for early termination cases
-  return algorithmUsed === "MCTS" && !earlyTerminated;
+
+  return algorithmUsed.startsWith('MCTS') && !earlyTerminated;
 }
 
 function displayMCTSDebugInfo(mctsDebugInfo) {
   if (!mctsDebugInfo || state.verbose_level === 0) return;
-  
+
   const debugContent = document.getElementById('debug-content');
   if (!debugContent) return;
-  
+
   let output = '';
-  
-  // Display algorithm information first
   output += displayAlgorithmInfo(mctsDebugInfo);
-  
-  // Determine once whether to show MCTS-specific stats
+
   const showMCTSStats = shouldShowMCTSStats(mctsDebugInfo);
-  
-  // MCTS Search Statistics (condensed) - only show if MCTS was used
-  if (mctsDebugInfo.search_stats && showMCTSStats) {
-    output += '=== MCTS SEARCH STATISTICS ===\n';
-    output += `Simulations: ${mctsDebugInfo.search_stats.num_simulations} | `;
-    output += `Time: ${mctsDebugInfo.search_stats.search_time.toFixed(3)}s | `;
-    output += `Inferences: ${mctsDebugInfo.search_stats.total_inferences} | `;
-    output += `Exploration: ${mctsDebugInfo.search_stats.exploration_constant} | `;
-    output += `Temperature: ${mctsDebugInfo.search_stats.temperature}\n\n`;
+  output += formatTimingSummary(mctsDebugInfo.timing_summary);
+
+  const summary = mctsDebugInfo.summary || {};
+  const moveSelection = mctsDebugInfo.move_selection || {};
+  const treeStats = mctsDebugInfo.tree_statistics || {};
+  const searchStats = mctsDebugInfo.search_stats || {};
+  const profiling = mctsDebugInfo.profiling_summary || {};
+  const moveProbabilities = mctsDebugInfo.move_probabilities || {};
+  const comparison = mctsDebugInfo.comparison && mctsDebugInfo.comparison.mcts_vs_direct;
+  const selectedMove = moveSelection.selected_move || summary.selected_move || 'n/a';
+
+  output += '=== MOVE SUMMARY ===\n';
+  output += `Selected: ${selectedMove}`;
+  if (Array.isArray(moveSelection.selected_move_coords)) {
+    output += ` (${formatMoveCoordinates(moveSelection.selected_move_coords)})`;
   }
-  
-  // Move Selection
-  if (mctsDebugInfo.move_selection) {
-    output += '=== MOVE SELECTION ===\n';
-    output += `Selected: ${mctsDebugInfo.move_selection.selected_move} (${mctsDebugInfo.move_selection.selected_move_coords[0]}, ${mctsDebugInfo.move_selection.selected_move_coords[1]})\n\n`;
+  output += '\n';
+  const moveSummaryParts = [];
+  if (summary.top_mcts_move_raw_visits || summary.top_mcts_move) {
+    moveSummaryParts.push(`Search top: ${summary.top_mcts_move_raw_visits || summary.top_mcts_move}`);
   }
-  
-  // Tree Statistics (condensed) - only show if MCTS was used
-  if (mctsDebugInfo.tree_statistics && showMCTSStats) {
-    output += '=== TREE STATISTICS ===\n';
-    output += `Nodes: ${mctsDebugInfo.tree_statistics.total_nodes} | `;
-    output += `Max Depth: ${mctsDebugInfo.tree_statistics.max_depth} | `;
-    output += `Total Visits: ${mctsDebugInfo.tree_statistics.total_visits}\n\n`;
+  if (summary.top_mcts_move_temperature_scaled) {
+    moveSummaryParts.push(`Temp top: ${summary.top_mcts_move_temperature_scaled}`);
   }
-  
-  // Move Probabilities
-  if (mctsDebugInfo.move_probabilities) {
-    output += '=== MOVE PROBABILITIES ===\n';
-    
-    // MCTS visit counts (top moves only) - only show if MCTS was used
-    if (mctsDebugInfo.move_probabilities.mcts_visits && showMCTSStats) {
-      output += 'MCTS Visit Counts:\n';
-      const sortedVisits = Object.entries(mctsDebugInfo.move_probabilities.mcts_visits)
-        .sort(([,a], [,b]) => b - a);
-      
-      // Show only moves with visits > 0, limit to top 10
-      const nonZeroVisits = sortedVisits.filter(([, visits]) => visits > 0).slice(0, 10);
-      
-      if (nonZeroVisits.length > 0) {
-        nonZeroVisits.forEach(([move, visits]) => {
-          const prob = visits / mctsDebugInfo.tree_statistics.total_visits * 100;
-          output += `  ${move}: ${visits} visits (${prob.toFixed(1)}%)\n`;
-        });
-        
-        // Add summary for remaining moves
-        const remainingVisits = sortedVisits.filter(([, visits]) => visits > 0).slice(10);
-        if (remainingVisits.length > 0) {
-          const totalRemaining = remainingVisits.reduce((sum, [, visits]) => sum + visits, 0);
-          const remainingProb = totalRemaining / mctsDebugInfo.tree_statistics.total_visits * 100;
-          output += `  ... and ${remainingVisits.length} more moves (${remainingProb.toFixed(1)}%)\n`;
-        }
-      } else {
-        output += '  (no moves were visited)\n';
-      }
-      output += '\n';
+  if (summary.top_direct_move) {
+    moveSummaryParts.push(`Direct top: ${summary.top_direct_move}`);
+  }
+  if (moveSummaryParts.length > 0) {
+    output += `${moveSummaryParts.join(' | ')}\n`;
+  }
+  if (summary.moves_explored !== null && summary.moves_explored !== undefined) {
+    output += `Explored: ${summary.moves_explored}/${summary.total_legal_moves}\n`;
+  } else if (summary.total_legal_moves !== null && summary.total_legal_moves !== undefined) {
+    output += `Legal moves: ${summary.total_legal_moves}\n`;
+  }
+  output += '\n';
+
+  if (showMCTSStats) {
+    output += '=== SEARCH SUMMARY ===\n';
+    const searchLineParts = [];
+    if (Number.isFinite(Number(searchStats.num_simulations))) {
+      searchLineParts.push(`Simulations: ${Number(searchStats.num_simulations)}`);
     }
-    
-    // Direct policy probabilities (top moves only)
-    if (mctsDebugInfo.move_probabilities.direct_policy) {
-      output += 'Direct Policy Probabilities (Top 10):\n';
-      const sortedDirect = Object.entries(mctsDebugInfo.move_probabilities.direct_policy)
-        .sort(([,a], [,b]) => b - a)
-        .slice(0, 10);
-      sortedDirect.forEach(([move, prob]) => {
-        const probPercent = (prob * 100).toFixed(2);
-        output += `  ${move}: ${probPercent}%\n`;
-      });
-      output += '\n';
+    if (Number.isFinite(Number(searchStats.inferences))) {
+      searchLineParts.push(`Inferences: ${Number(searchStats.inferences)}`);
+    } else if (Number.isFinite(Number(treeStats.inferences))) {
+      searchLineParts.push(`Inferences: ${Number(treeStats.inferences)}`);
     }
-  }
-  
-  // Comparison (top differences only) - only show if MCTS was used
-  if (mctsDebugInfo.comparison && mctsDebugInfo.comparison.mcts_vs_direct && showMCTSStats) {
-    output += '=== MCTS vs DIRECT POLICY COMPARISON ===\n';
-    const sortedComparison = Object.entries(mctsDebugInfo.comparison.mcts_vs_direct)
-      .sort(([,a], [,b]) => Math.abs(b.difference) - Math.abs(a.difference))
-      .slice(0, 10); // Show top 10 biggest differences
-    sortedComparison.forEach(([move, data]) => {
-      const mctsPercent = (data.mcts_probability * 100).toFixed(1);
-      const directPercent = (data.direct_probability * 100).toFixed(1);
-      const diffPercent = (data.difference * 100).toFixed(1);
-      const diffSign = data.difference >= 0 ? '+' : '';
-      output += `  ${move}: MCTS ${mctsPercent}% vs Direct ${directPercent}% (${diffSign}${diffPercent}%)\n`;
-    });
+    if (Number.isFinite(Number(treeStats.total_nodes))) {
+      searchLineParts.push(`Nodes: ${Number(treeStats.total_nodes)}`);
+    }
+    if (Number.isFinite(Number(treeStats.max_depth))) {
+      searchLineParts.push(`Depth: ${Number(treeStats.max_depth)}`);
+    }
+    if (Number.isFinite(Number(profiling.simulations_per_second))) {
+      searchLineParts.push(`Sim/s: ${Number(profiling.simulations_per_second).toFixed(1)}`);
+    }
+    if (searchLineParts.length > 0) {
+      output += `${searchLineParts.join(' | ')}\n`;
+    }
+
+    const perfLineParts = [];
+    if (Number.isFinite(Number(profiling.cache_hits)) || Number.isFinite(Number(profiling.cache_misses))) {
+      perfLineParts.push(`Cache: ${Number(profiling.cache_hits || 0)} hit / ${Number(profiling.cache_misses || 0)} miss`);
+    }
+    if (Number.isFinite(Number(profiling.batch_count))) {
+      perfLineParts.push(`Batches: ${Number(profiling.batch_count || 0)}`);
+    }
+    if (Number.isFinite(Number(profiling.unique_evals_total)) && Number.isFinite(Number(profiling.effective_sims_total)) && Number(profiling.effective_sims_total) > 0) {
+      perfLineParts.push(`Unique evals: ${Number(profiling.unique_evals_total)}/${Number(profiling.effective_sims_total)}`);
+    }
+    if (perfLineParts.length > 0) {
+      output += `${perfLineParts.join(' | ')}\n`;
+    }
     output += '\n';
   }
-  
-  // Win Rate Analysis
+
   if (mctsDebugInfo.win_rate_analysis) {
-    output += '=== WIN RATE ANALYSIS ===\n';
     const winRate = mctsDebugInfo.win_rate_analysis;
-    const rootBoardWinProb = winRate.root_network_win_probability;
-    const selectedMoveSearchWinProb = winRate.selected_move_search_win_probability;
-    const selectedMoveValueHeadWinProb = winRate.selected_move_value_head_win_probability;
-    const bestChildWinProb = winRate.best_child_win_probability;
-    const bestChildMove = winRate.best_child_move;
-
-    if (rootBoardWinProb !== null && rootBoardWinProb !== undefined) {
-      output += `Current Board Win Probability (Value Head): ${formatProbAsPercent(rootBoardWinProb, 2)}\n`;
+    output += '=== WIN RATES ===\n';
+    if (winRate.root_network_win_probability !== null && winRate.root_network_win_probability !== undefined) {
+      output += `Board (value head): ${formatProbAsPercent(winRate.root_network_win_probability, 2)}\n`;
     }
-
     if (winRate.selected_move_search_value_available === false) {
-      output += 'Chosen Move Win Probability (Search): N/A (move was not searched)\n';
-    } else if (selectedMoveSearchWinProb !== null && selectedMoveSearchWinProb !== undefined) {
-      output += `Chosen Move Win Probability (Search): ${formatProbAsPercent(selectedMoveSearchWinProb, 2)}\n`;
+      output += 'Chosen move (search): n/a\n';
+    } else if (winRate.selected_move_search_win_probability !== null && winRate.selected_move_search_win_probability !== undefined) {
+      output += `Chosen move (search): ${formatProbAsPercent(winRate.selected_move_search_win_probability, 2)}\n`;
     }
-
-    if (selectedMoveValueHeadWinProb !== null && selectedMoveValueHeadWinProb !== undefined) {
-      output += `Chosen Move Win Probability (Value Head): ${formatProbAsPercent(selectedMoveValueHeadWinProb, 2)}\n`;
+    if (winRate.selected_move_value_head_win_probability !== null && winRate.selected_move_value_head_win_probability !== undefined) {
+      output += `Chosen move (value head): ${formatProbAsPercent(winRate.selected_move_value_head_win_probability, 2)}\n`;
     }
-
     if (
       winRate.best_child_value_available !== false
-      && bestChildWinProb !== null
-      && bestChildWinProb !== undefined
-      && bestChildMove
-      && bestChildMove !== winRate.selected_move
+      && winRate.best_child_win_probability !== null
+      && winRate.best_child_win_probability !== undefined
+      && winRate.best_child_move
+      && winRate.best_child_move !== winRate.selected_move
     ) {
-      output += `Best Explored Child Win Probability: ${formatProbAsPercent(bestChildWinProb, 2)} (${bestChildMove})\n`;
+      output += `Best explored child: ${formatProbAsPercent(winRate.best_child_win_probability, 2)} (${winRate.best_child_move})\n`;
     }
     output += '\n';
   }
-  
-  // Gumbel Root Selection (if used)
+
+  if (moveProbabilities.direct_policy || (showMCTSStats && moveProbabilities.mcts_visits)) {
+    output += '=== TOP MOVES ===\n';
+    if (showMCTSStats && moveProbabilities.mcts_visits) {
+      output += 'Search visits:\n';
+      output += formatVisitEntries(moveProbabilities.mcts_visits, treeStats.total_visits);
+    }
+    if (moveProbabilities.direct_policy) {
+      const sortedDirect = Object.entries(moveProbabilities.direct_policy).sort(([, a], [, b]) => b - a);
+      output += 'Direct policy:\n';
+      output += formatProbabilityEntries(sortedDirect);
+    }
+    if (showMCTSStats && comparison) {
+      output += 'Largest search vs direct deltas:\n';
+      output += formatComparisonEntries(comparison);
+    }
+    output += '\n';
+  }
+
   if (mctsDebugInfo.gumbel_analysis && mctsDebugInfo.gumbel_analysis.gumbel_used) {
     const g = mctsDebugInfo.gumbel_analysis;
-    output += '=== GUMBEL ROOT SELECTION ===\n';
-    if (g.gumbel_selection_note) output += `${g.gumbel_selection_note}\n`;
-    if (g.gumbel_final_rank_top_move) output += `Top Final-Rank Move: ${g.gumbel_final_rank_top_move}\n`;
-    if (g.gumbel_v_pi_01 !== null && g.gumbel_v_pi_01 !== undefined) output += `v_pi (0-1): ${Number(g.gumbel_v_pi_01).toFixed(4)}\n`;
-    if (Array.isArray(g.gumbel_final_rank_top5) && g.gumbel_final_rank_top5.length > 0) {
-      output += 'Final-Rank Top 5 Candidate Rows (log_prior + c_scale*(q - v_pi)):\n';
-      g.gumbel_final_rank_top5.forEach((row) => {
-        const score = (row.score !== null && row.score !== undefined) ? Number(row.score).toFixed(4) : 'N/A';
-        const logPrior = (row.log_prior !== null && row.log_prior !== undefined) ? Number(row.log_prior).toFixed(4) : 'N/A';
-        const adv = (row.adv_01 !== null && row.adv_01 !== undefined) ? Number(row.adv_01).toFixed(4) : 'N/A';
-        const q01 = (row.q_01 !== null && row.q_01 !== undefined) ? Number(row.q_01).toFixed(4) : 'N/A';
-        const qSource = row.q_source ? `, qsrc=${row.q_source}` : '';
-        output += `  ${row.move}: score=${score} (log_prior=${logPrior}, q01=${q01}, adv=${adv}, visits=${row.visits}${qSource})\n`;
-      });
+    output += '=== GUMBEL ===\n';
+    const gumbelParts = [
+      `Candidates: ${g.gumbel_candidates_m}`,
+      `Rounds: ${g.gumbel_rounds_R}`
+    ];
+    if (g.gumbel_final_rank_top_move) {
+      gumbelParts.push(`Top final-rank: ${g.gumbel_final_rank_top_move}`);
+    }
+    if (g.gumbel_v_pi_01 !== null && g.gumbel_v_pi_01 !== undefined) {
+      gumbelParts.push(`v_pi: ${formatFinite(g.gumbel_v_pi_01, 4)}`);
+    }
+    output += `${gumbelParts.join(' | ')}\n`;
+    if (state.verbose_level >= 3 && Array.isArray(g.gumbel_final_rank_top5) && g.gumbel_final_rank_top5.length > 0) {
+      output += 'Top final-rank rows:\n';
+      output += formatCompactGumbelRows(g.gumbel_final_rank_top5);
     }
     output += '\n';
   }
-  
-  // Summary
-  if (mctsDebugInfo.summary) {
-    output += '=== SUMMARY ===\n';
-    const summary = mctsDebugInfo.summary;
-    // Selected move can differ from argmax due to temperature sampling / Gumbel.
-    output += `Selected Move: ${summary.selected_move || (mctsDebugInfo.move_selection ? mctsDebugInfo.move_selection.selected_move : 'N/A')}\n`;
-    output += `Top MCTS Move (Raw Visits): ${summary.top_mcts_move_raw_visits || summary.top_mcts_move || 'N/A'}\n`;
-    if (summary.top_mcts_move_temperature_scaled) {
-      output += `Top MCTS Move (Temperature Scaled): ${summary.top_mcts_move_temperature_scaled}\n`;
-    }
-    output += `Top Direct Move: ${summary.top_direct_move || 'N/A'}\n`;
-    if (summary.moves_explored !== null && summary.moves_explored !== undefined) {
-      output += `Moves Explored: ${summary.moves_explored}/${summary.total_legal_moves}\n`;
-    } else {
-      output += `Moves Explored: N/A (Algorithm Termination)\n`;
-    }
-    output += `Search Efficiency: ${summary.search_efficiency.toFixed(2)} inferences/simulation\n\n`;
+
+  if (mctsDebugInfo.move_sequence_analysis && Array.isArray(mctsDebugInfo.move_sequence_analysis.principal_variation) && mctsDebugInfo.move_sequence_analysis.principal_variation.length > 0) {
+    output += '=== PV ===\n';
+    output += `${formatPrincipalVariationInline(mctsDebugInfo.move_sequence_analysis.principal_variation)}\n\n`;
   }
-  
-  // Move Sequence Analysis
-  if (mctsDebugInfo.move_sequence_analysis) {
-    output += '=== MOVE SEQUENCE ANALYSIS ===\n';
-    const seqAnalysis = mctsDebugInfo.move_sequence_analysis;
-    
-    if (seqAnalysis.principal_variation && seqAnalysis.principal_variation.length > 0) {
-      output += `Principal Variation (${seqAnalysis.pv_length} moves):\n`;
-      seqAnalysis.principal_variation.forEach((move, index) => {
-        output += `  ${index + 1}. ${move}\n`;
-      });
-      output += '\n';
-    }
-    
-    if (seqAnalysis.alternative_lines && seqAnalysis.alternative_lines.length > 0) {
-      output += 'Alternative Lines:\n';
-      seqAnalysis.alternative_lines.forEach(alt => {
-        const probPercent = (alt.probability * 100).toFixed(1);
-        output += `  Depth ${alt.depth + 1}: ${alt.move} (${alt.visits} visits, ${probPercent}%, value: ${alt.value.toFixed(4)})\n`;
-      });
-      output += '\n';
-    }
-  }
-  
-  debugContent.textContent = output;
+
+  debugContent.textContent = output.trimEnd();
 }
 
 function displayFixedTreeDebugInfo(fixedTreeDebugInfo) {
   if (!fixedTreeDebugInfo || state.verbose_level === 0) return;
-  
+
   const debugContent = document.getElementById('debug-content');
   if (!debugContent) return;
-  
+
   let output = '';
-  
-  // Display algorithm information first
   output += displayAlgorithmInfo(fixedTreeDebugInfo);
-  
-  // Fixed Tree Search Statistics
-  if (fixedTreeDebugInfo.search_stats) {
-    output += '=== FIXED TREE SEARCH STATISTICS ===\n';
-    output += `Search Widths: [${fixedTreeDebugInfo.search_stats.search_widths.join(', ')}] | `;
-    output += `Time: ${fixedTreeDebugInfo.search_stats.search_time.toFixed(3)}s | `;
-    output += `Temperature: ${fixedTreeDebugInfo.search_stats.temperature}\n\n`;
+  output += formatTimingSummary(fixedTreeDebugInfo.timing_summary);
+
+  const summary = fixedTreeDebugInfo.summary || {};
+  const moveSelection = fixedTreeDebugInfo.move_selection || {};
+  const treeStats = fixedTreeDebugInfo.tree_statistics || {};
+  const searchStats = fixedTreeDebugInfo.search_stats || {};
+  const profiling = fixedTreeDebugInfo.profiling_summary || {};
+
+  output += '=== MOVE SUMMARY ===\n';
+  output += `Selected: ${moveSelection.selected_move || 'n/a'}`;
+  if (Array.isArray(moveSelection.selected_move_coords)) {
+    output += ` (${formatMoveCoordinates(moveSelection.selected_move_coords)})`;
   }
-  
-  // Move Selection
-  if (fixedTreeDebugInfo.move_selection) {
-    output += '=== MOVE SELECTION ===\n';
-    output += `Selected: ${fixedTreeDebugInfo.move_selection.selected_move} (${fixedTreeDebugInfo.move_selection.selected_move_coords[0]}, ${fixedTreeDebugInfo.move_selection.selected_move_coords[1]})\n\n`;
+  output += '\n';
+  const moveSummaryParts = [];
+  if (summary.top_direct_move) {
+    moveSummaryParts.push(`Direct top: ${summary.top_direct_move}`);
   }
-  
-  // Tree Statistics
-  if (fixedTreeDebugInfo.tree_statistics) {
-    output += '=== TREE STATISTICS ===\n';
-    output += `Total Positions: ${fixedTreeDebugInfo.tree_statistics.total_positions} | `;
-    output += `Tree Depth: ${fixedTreeDebugInfo.tree_statistics.tree_depth} | `;
-    output += `Tree Width: ${fixedTreeDebugInfo.tree_statistics.tree_width} | `;
-    output += `Policy Evaluations: ${fixedTreeDebugInfo.tree_statistics.policy_evaluations} | `;
-    output += `Value Evaluations: ${fixedTreeDebugInfo.tree_statistics.value_evaluations}\n\n`;
+  if (summary.moves_explored) {
+    moveSummaryParts.push(`Explored: ${summary.moves_explored}`);
   }
-  
-  // Move Probabilities
-  if (fixedTreeDebugInfo.move_probabilities) {
-    output += '=== MOVE PROBABILITIES ===\n';
-    
-    // Direct policy probabilities (top moves only)
-    if (fixedTreeDebugInfo.move_probabilities.direct_policy) {
-      output += 'Direct Policy Probabilities:\n';
-      const sortedPolicy = Object.entries(fixedTreeDebugInfo.move_probabilities.direct_policy)
-        .sort(([,a], [,b]) => b - a)
-        .slice(0, 10);
-      sortedPolicy.forEach(([move, prob]) => {
-        const probPercent = (prob * 100).toFixed(2);
-        output += `  ${move}: ${probPercent}%\n`;
-      });
-      output += '\n';
-    }
+  if (moveSummaryParts.length > 0) {
+    output += `${moveSummaryParts.join(' | ')}\n`;
   }
-  
-  // Win Rate Analysis
+  output += '\n';
+
+  output += '=== SEARCH SUMMARY ===\n';
+  const searchLineParts = [];
+  if (Array.isArray(searchStats.search_widths) && searchStats.search_widths.length > 0) {
+    searchLineParts.push(`Widths: [${searchStats.search_widths.join(', ')}]`);
+  }
+  if (Number.isFinite(Number(treeStats.total_positions))) {
+    searchLineParts.push(`Positions: ${Number(treeStats.total_positions)}`);
+  }
+  if (Number.isFinite(Number(treeStats.tree_depth))) {
+    searchLineParts.push(`Depth: ${Number(treeStats.tree_depth)}`);
+  }
+  if (Number.isFinite(Number(treeStats.tree_width))) {
+    searchLineParts.push(`Width: ${Number(treeStats.tree_width)}`);
+  }
+  if (Number.isFinite(Number(treeStats.policy_evaluations))) {
+    searchLineParts.push(`Policy evals: ${Number(treeStats.policy_evaluations)}`);
+  }
+  if (Number.isFinite(Number(treeStats.value_evaluations))) {
+    searchLineParts.push(`Value evals: ${Number(treeStats.value_evaluations)}`);
+  }
+  output += `${searchLineParts.join(' | ')}\n\n`;
+
   if (fixedTreeDebugInfo.win_rate_analysis) {
-    output += '=== WIN RATE ANALYSIS ===\n';
-    output += `Root Value: ${fixedTreeDebugInfo.win_rate_analysis.root_value.toFixed(4)} | `;
-    output += `Win Probability: ${(fixedTreeDebugInfo.win_rate_analysis.win_probability * 100).toFixed(2)}%\n\n`;
+    output += '=== WIN RATES ===\n';
+    output += `Root value: ${formatFinite(fixedTreeDebugInfo.win_rate_analysis.root_value, 4)} | `;
+    output += `Win probability: ${formatProbAsPercent(fixedTreeDebugInfo.win_rate_analysis.win_probability, 2)}\n\n`;
   }
-  
-  // Summary
-  if (fixedTreeDebugInfo.summary) {
-    output += '=== SUMMARY ===\n';
-    output += `Algorithm: ${fixedTreeDebugInfo.summary.algorithm_summary}\n`;
-    output += `Total Legal Moves: ${fixedTreeDebugInfo.summary.total_legal_moves}\n`;
-    output += `Moves Explored: ${fixedTreeDebugInfo.summary.moves_explored}\n`;
-    output += `Search Efficiency: ${(fixedTreeDebugInfo.summary.search_efficiency * 100).toFixed(1)}%\n`;
-    if (fixedTreeDebugInfo.summary.top_direct_move) {
-      output += `Top Direct Move: ${fixedTreeDebugInfo.summary.top_direct_move}\n`;
-    }
+
+  if (fixedTreeDebugInfo.move_probabilities && fixedTreeDebugInfo.move_probabilities.direct_policy) {
+    const sortedPolicy = Object.entries(fixedTreeDebugInfo.move_probabilities.direct_policy)
+      .sort(([, a], [, b]) => b - a);
+    output += '=== TOP MOVES ===\n';
+    output += 'Direct policy:\n';
+    output += formatProbabilityEntries(sortedPolicy);
     output += '\n';
   }
-  
-  // Profiling Summary
+
   if (fixedTreeDebugInfo.profiling_summary) {
     output += '=== PERFORMANCE ===\n';
-    output += `Total Compute: ${fixedTreeDebugInfo.profiling_summary.total_compute_ms}ms | `;
-    output += `Memory Usage: ${fixedTreeDebugInfo.profiling_summary.memory_usage_mb.toFixed(1)}MB\n`;
-    output += `Tree Building: ${fixedTreeDebugInfo.profiling_summary.tree_building_time_ms}ms | `;
-    output += `Leaf Evaluation: ${fixedTreeDebugInfo.profiling_summary.leaf_evaluation_time_ms}ms | `;
-    output += `Backup: ${fixedTreeDebugInfo.profiling_summary.backup_time_ms}ms\n`;
-    output += `Policy NN: ${fixedTreeDebugInfo.profiling_summary.policy_nn_time_ms}ms | `;
-    output += `Value NN: ${fixedTreeDebugInfo.profiling_summary.value_nn_time_ms}ms\n\n`;
+    const perfParts = [];
+    if (Number.isFinite(Number(profiling.memory_usage_mb))) {
+      perfParts.push(`Memory: ${formatFinite(profiling.memory_usage_mb, 1)}MB`);
+    }
+    if (Number.isFinite(Number(profiling.policy_nn_time_ms))) {
+      perfParts.push(`Policy NN: ${formatDurationMs(profiling.policy_nn_time_ms)}`);
+    }
+    if (Number.isFinite(Number(profiling.value_nn_time_ms))) {
+      perfParts.push(`Value NN: ${formatDurationMs(profiling.value_nn_time_ms)}`);
+    }
+    if (Number.isFinite(Number(profiling.tree_building_time_ms))) {
+      perfParts.push(`Tree build: ${formatDurationMs(profiling.tree_building_time_ms)}`);
+    }
+    if (Number.isFinite(Number(profiling.leaf_evaluation_time_ms))) {
+      perfParts.push(`Leaf eval: ${formatDurationMs(profiling.leaf_evaluation_time_ms)}`);
+    }
+    if (Number.isFinite(Number(profiling.backup_time_ms))) {
+      perfParts.push(`Backup: ${formatDurationMs(profiling.backup_time_ms)}`);
+    }
+    output += `${perfParts.join(' | ')}\n\n`;
   }
-  
-  debugContent.textContent = output;
+
+  debugContent.textContent = output.trimEnd();
 }
 
 function displayDebugInfo(debugInfo) {
@@ -2234,76 +2178,56 @@ function displayDebugInfo(debugInfo) {
   if (!debugContent) return;
   
   let output = '';
-  
-  // Display algorithm information first
   output += displayAlgorithmInfo(debugInfo);
+  output += formatTimingSummary(debugInfo.timing_summary);
   
-  // Model information
   if (debugInfo.model_info) {
-    output += '=== MODEL INFORMATION ===\n';
-    output += `Model ID: ${debugInfo.model_info.model_id}\n`;
-    output += `Model Type: ${debugInfo.model_info.model_type}\n`;
-    output += `Model Path: ${debugInfo.model_info.model_path}\n`;
-    output += '\n';
+    output += '=== MODEL ===\n';
+    output += `ID: ${debugInfo.model_info.model_id}\n`;
+    output += `Type: ${debugInfo.model_info.model_type}\n`;
+    output += `Path: ${debugInfo.model_info.model_path}\n\n`;
   }
   
-  // Basic information
   if (debugInfo.basic) {
-    output += '=== BASIC INFORMATION ===\n';
-    output += `Current Player: ${debugInfo.basic.current_player}\n`;
-    output += `Game Over: ${debugInfo.basic.game_over}\n`;
-    output += `Legal Moves: ${debugInfo.basic.legal_moves_count}\n`;
-    output += `Value Signed: ${debugInfo.basic.value_signed.toFixed(4)}\n`;
-    output += `Win Probability: ${(debugInfo.basic.win_probability * 100).toFixed(2)}%\n`;
-    output += `Temperature: ${debugInfo.basic.temperature}\n`;
-    output += `Search Widths: ${debugInfo.basic.search_widths ? debugInfo.basic.search_widths.join(',') : 'None'}\n`;
+    output += '=== STATE ===\n';
+    output += `Current player: ${debugInfo.basic.current_player} | `;
+    output += `Game over: ${debugInfo.basic.game_over} | `;
+    output += `Legal moves: ${debugInfo.basic.legal_moves_count}\n`;
+    output += `Value signed: ${formatFinite(debugInfo.basic.value_signed, 4)} | `;
+    output += `Win probability: ${formatProbAsPercent(debugInfo.basic.win_probability, 2)}\n`;
+    output += `Temperature: ${debugInfo.basic.temperature}`;
+    output += ` | Search widths: ${debugInfo.basic.search_widths ? debugInfo.basic.search_widths.join(',') : 'None'}\n`;
     if (debugInfo.basic.model_move) {
-      output += `Model Move: ${debugInfo.basic.model_move}\n`;
+      output += `Model move: ${debugInfo.basic.model_move}\n`;
     }
     output += '\n';
   }
   
-  // Policy analysis
   if (debugInfo.policy_analysis) {
     output += '=== POLICY ANALYSIS ===\n';
-    
-    // Post-temperature scaling (current behavior)
-    output += `Top ${debugInfo.policy_analysis.top_moves.length} moves (post-temperature scaling):\n`;
-    debugInfo.policy_analysis.top_moves.forEach((move, index) => {
-      const probPercent = (move.probability * 100).toFixed(2);
-      output += `  ${index + 1}. ${move.move} (${move.row},${move.col}): ${probPercent}%\n`;
-    });
-    
-    // Pre-temperature scaling (raw logits)
-    if (debugInfo.policy_analysis.raw_top_moves) {
-      output += `\nTop ${debugInfo.policy_analysis.raw_top_moves.length} moves (raw logits, pre-temperature):\n`;
-      debugInfo.policy_analysis.raw_top_moves.forEach((move, index) => {
-        const logitStr = move.raw_logit.toFixed(4);
-        output += `  ${index + 1}. ${move.move} (${move.row},${move.col}): ${logitStr}\n`;
-      });
+    const normalizedTopMoves = normalizeProbabilityEntries(debugInfo.policy_analysis.top_moves);
+    output += formatProbabilityEntries(normalizedTopMoves, { digits: 2 });
+    if (debugInfo.policy_analysis.total_legal_moves !== undefined) {
+      output += `Total legal moves: ${debugInfo.policy_analysis.total_legal_moves}\n`;
     }
-    
-    output += `Total legal moves: ${debugInfo.policy_analysis.total_legal_moves}\n\n`;
+    output += '\n';
   }
   
-  // Tree search analysis
   if (debugInfo.tree_search) {
-    output += '=== TREE SEARCH ANALYSIS ===\n';
+    output += '=== TREE SEARCH ===\n';
     if (debugInfo.tree_search.error) {
       output += `Error: ${debugInfo.tree_search.error}\n`;
     } else {
-      output += `Search Widths: ${debugInfo.tree_search.search_widths.join(',')}\n`;
-      output += `Tree Depth: ${debugInfo.tree_search.tree_depth}\n`;
-      output += `Tree Size: ${debugInfo.tree_search.tree_size} nodes\n`;
-      output += `Final Value: ${debugInfo.tree_search.final_value.toFixed(4)}\n`;
-      output += `Best Move: ${debugInfo.tree_search.best_move || 'None'}\n`;
-      
-      // Terminal nodes (verbose level 3)
+      output += `Widths: ${debugInfo.tree_search.search_widths.join(',')} | `;
+      output += `Depth: ${debugInfo.tree_search.tree_depth} | `;
+      output += `Tree size: ${debugInfo.tree_search.tree_size} nodes\n`;
+      output += `Final value: ${formatFinite(debugInfo.tree_search.final_value, 4)} | `;
+      output += `Best move: ${debugInfo.tree_search.best_move || 'None'}\n`;
       if (debugInfo.tree_search.terminal_nodes && state.verbose_level >= 3) {
-        output += '\nTerminal Nodes:\n';
+        output += 'Terminal nodes:\n';
         debugInfo.tree_search.terminal_nodes.forEach((node, index) => {
           const pathStr = node.path.join(' → ');
-          const valueStr = node.value !== null ? node.value.toFixed(4) : 'None';
+          const valueStr = node.value !== null ? formatFinite(node.value, 4) : 'None';
           output += `  ${index + 1}. Path: ${pathStr} | Value: ${valueStr} | Depth: ${node.depth}\n`;
         });
       }
@@ -2311,23 +2235,23 @@ function displayDebugInfo(debugInfo) {
     output += '\n';
   }
   
-  // Policy vs Value comparison
   if (debugInfo.policy_value_comparison) {
-    output += '=== POLICY vs VALUE COMPARISON ===\n';
-    output += `Policy Top Move: ${debugInfo.policy_value_comparison.policy_top_move}\n`;
-    output += `Tree Best Move: ${debugInfo.policy_value_comparison.tree_best_move}\n`;
-    output += `Moves Match: ${debugInfo.policy_value_comparison.moves_match ? 'YES' : 'NO'}\n`;
-    output += `Policy Top Probability: ${(debugInfo.policy_value_comparison.policy_top_prob * 100).toFixed(2)}%\n`;
+    output += '=== POLICY vs VALUE ===\n';
+    output += `Policy top: ${debugInfo.policy_value_comparison.policy_top_move}\n`;
+    output += `Tree best: ${debugInfo.policy_value_comparison.tree_best_move}\n`;
+    output += `Match: ${debugInfo.policy_value_comparison.moves_match ? 'YES' : 'NO'}\n`;
+    output += `Policy top probability: ${formatProbAsPercent(debugInfo.policy_value_comparison.policy_top_prob, 2)}\n`;
     if (!debugInfo.policy_value_comparison.moves_match) {
-      output += '⚠️  WARNING: Policy and value networks disagree!\n';
+      output += 'Warning: policy and value networks disagree.\n';
     }
     output += '\n';
   }
   
-  debugContent.textContent = output;
+  debugContent.textContent = output.trimEnd();
 
-  // Display detailed exploration if available
-  displayDetailedExploration(debugInfo);
+  if (debugInfo.tree_data || debugInfo.mcts_debug_info) {
+    displayDetailedExploration(debugInfo);
+  }
 }
 
 function displayPolicyInfo(policyInfo) {
@@ -2337,24 +2261,19 @@ function displayPolicyInfo(policyInfo) {
   if (!debugContent) return;
   
   let output = '';
-  
-  // Policy move information
+  output += formatTimingSummary(policyInfo.timing_summary);
   output += '=== POLICY MOVE ===\n';
-  output += `Selected Move: ${policyInfo.selected_move}\n`;
-  output += `Probability: ${(policyInfo.selected_probability * 100).toFixed(2)}%\n`;
+  output += `Selected: ${policyInfo.selected_move} | `;
+  output += `Probability: ${formatProbAsPercent(policyInfo.selected_probability, 2)} | `;
   output += `Temperature: ${policyInfo.temperature}\n\n`;
-  
-  // Top moves
+
   if (policyInfo.top_moves && policyInfo.top_moves.length > 0) {
-    output += 'Top Policy Moves:\n';
-    policyInfo.top_moves.forEach(([move, prob], index) => {
-      const probPercent = (prob * 100).toFixed(2);
-      output += `  ${index + 1}. ${move}: ${probPercent}%\n`;
-    });
+    output += 'Top policy moves:\n';
+    output += formatProbabilityEntries(policyInfo.top_moves, { digits: 2 });
     output += '\n';
   }
   
-  debugContent.textContent = output;
+  debugContent.textContent = output.trimEnd();
 }
 
 function formatFinite(value, digits = 4, fallback = 'n/a') {
@@ -2436,6 +2355,162 @@ function formatProbAsPercent(prob, digits = 2) {
   const num = Number(prob);
   if (!Number.isFinite(num)) return 'n/a';
   return `${(num * 100).toFixed(digits)}%`;
+}
+
+function getDebugMoveListLimit() {
+  if (state.verbose_level >= 3) return 8;
+  if (state.verbose_level >= 2) return 6;
+  return 5;
+}
+
+function formatDurationMs(ms, fallback = 'n/a') {
+  const num = Number(ms);
+  if (!Number.isFinite(num)) return fallback;
+  if (Math.abs(num) >= 1000) {
+    return `${(num / 1000).toFixed(3)}s`;
+  }
+  return `${Math.round(num)}ms`;
+}
+
+function formatTimingSummary(timingSummary) {
+  if (!timingSummary || typeof timingSummary !== 'object') return '';
+
+  let output = '=== TIMING ===\n';
+  const hasSummaryText = Boolean(timingSummary.summary_text);
+  if (timingSummary.summary_text) {
+    output += `${timingSummary.summary_text}\n`;
+  }
+
+  if (!hasSummaryText && Array.isArray(timingSummary.phases) && timingSummary.phases.length > 0) {
+    const phaseParts = timingSummary.phases
+      .filter((phase) => phase && Number(phase.ms) > 0)
+      .map((phase) => {
+        const share = Number.isFinite(Number(phase.share_pct))
+          ? ` (${Number(phase.share_pct).toFixed(0)}%)`
+          : '';
+        return `${phase.label}: ${formatDurationMs(phase.ms)}${share}`;
+      });
+    if (phaseParts.length > 0) {
+      output += `${phaseParts.join(' | ')}\n`;
+    }
+  }
+
+  if (timingSummary.dominant_phase && timingSummary.dominant_phase.label) {
+    const dominantShare = Number.isFinite(Number(timingSummary.dominant_phase.share_pct))
+      ? `, ${Number(timingSummary.dominant_phase.share_pct).toFixed(0)}%`
+      : '';
+    output += `Largest phase: ${timingSummary.dominant_phase.label} (${formatDurationMs(timingSummary.dominant_phase.ms)}${dominantShare})\n`;
+  }
+
+  output += '\n';
+  return output;
+}
+
+function formatMoveCoordinates(coords) {
+  if (!Array.isArray(coords) || coords.length < 2) return 'n/a';
+  return `${coords[0]},${coords[1]}`;
+}
+
+function normalizeProbabilityEntries(entries) {
+  if (!Array.isArray(entries)) return [];
+
+  return entries
+    .map((entry) => {
+      if (Array.isArray(entry) && entry.length >= 2) {
+        return [String(entry[0]), Number(entry[1])];
+      }
+      if (entry && typeof entry === 'object' && entry.move !== undefined) {
+        if (entry.probability !== undefined) {
+          return [String(entry.move), Number(entry.probability)];
+        }
+        if (entry.raw_logit !== undefined) {
+          return [String(entry.move), Number(entry.raw_logit)];
+        }
+      }
+      return null;
+    })
+    .filter(Boolean);
+}
+
+function formatProbabilityEntries(entries, options = {}) {
+  const limit = options.limit || getDebugMoveListLimit();
+  const digits = options.digits ?? 1;
+  const normalizedEntries = normalizeProbabilityEntries(entries);
+  if (normalizedEntries.length === 0) return '  (none)\n';
+
+  const limited = normalizedEntries.slice(0, limit);
+  let output = '';
+  limited.forEach(([move, prob]) => {
+    output += `  ${move}: ${formatProbAsPercent(prob, digits)}\n`;
+  });
+  if (normalizedEntries.length > limited.length) {
+    output += `  ... ${normalizedEntries.length - limited.length} more\n`;
+  }
+  return output;
+}
+
+function formatVisitEntries(visitsMap, totalVisits, limit = getDebugMoveListLimit()) {
+  if (!visitsMap || typeof visitsMap !== 'object') return '  (none)\n';
+
+  const entries = Object.entries(visitsMap)
+    .filter(([, visits]) => Number(visits) > 0)
+    .sort(([, a], [, b]) => b - a);
+
+  if (entries.length === 0) return '  (none)\n';
+
+  const limited = entries.slice(0, limit);
+  let output = '';
+  limited.forEach(([move, visits]) => {
+    const share = Number(totalVisits) > 0 ? formatProbAsPercent(Number(visits) / Number(totalVisits), 1) : 'n/a';
+    output += `  ${move}: ${visits} visits | ${share}\n`;
+  });
+  if (entries.length > limited.length) {
+    output += `  ... ${entries.length - limited.length} more\n`;
+  }
+  return output;
+}
+
+function formatComparisonEntries(comparisonMap, limit = getDebugMoveListLimit()) {
+  if (!comparisonMap || typeof comparisonMap !== 'object') return '  (none)\n';
+
+  const entries = Object.entries(comparisonMap)
+    .sort(([, a], [, b]) => Math.abs(Number(b.difference || 0)) - Math.abs(Number(a.difference || 0)));
+
+  if (entries.length === 0) return '  (none)\n';
+
+  const limited = entries.slice(0, limit);
+  let output = '';
+  limited.forEach(([move, data]) => {
+    const diff = Number(data.difference || 0);
+    const diffText = `${diff >= 0 ? '+' : ''}${(diff * 100).toFixed(1)}%`;
+    output += `  ${move}: search ${formatProbAsPercent(data.mcts_probability, 1)} vs direct ${formatProbAsPercent(data.direct_probability, 1)} (${diffText})\n`;
+  });
+  if (entries.length > limited.length) {
+    output += `  ... ${entries.length - limited.length} more\n`;
+  }
+  return output;
+}
+
+function formatPrincipalVariationInline(principalVariation) {
+  if (!Array.isArray(principalVariation) || principalVariation.length === 0) return 'n/a';
+  const limit = state.verbose_level >= 3 ? 10 : 6;
+  const shown = principalVariation.slice(0, limit).join(' -> ');
+  return principalVariation.length > limit ? `${shown} -> ...` : shown;
+}
+
+function formatCompactGumbelRows(rows, maxRows = getDebugMoveListLimit()) {
+  if (!Array.isArray(rows) || rows.length === 0) return '  (none)\n';
+
+  const limited = rows.slice(0, maxRows);
+  let output = '';
+  limited.forEach((row) => {
+    const visits = Number.isFinite(Number(row.visits)) ? Number(row.visits) : 0;
+    output += `  ${row.move}: score=${formatFinite(row.score, 4)} | q01=${formatFinite(row.q_01, 4)} | visits=${visits}\n`;
+  });
+  if (rows.length > limited.length) {
+    output += `  ... ${rows.length - limited.length} more\n`;
+  }
+  return output;
 }
 
 function formatValueSummaryInline(summary) {
@@ -2706,6 +2781,21 @@ function displayDetailedExploration(debugInfo) {
   }
 
   explorationContent.textContent = renderLegacyDetailedTrace(detailedExploration, trace);
+}
+
+function updateDetailedExplorationFromResult(result) {
+  const explorationDiv = document.getElementById('detailed-exploration');
+  if (!explorationDiv) return;
+
+  if (result && result.mcts_debug_info) {
+    displayDetailedExploration({
+      tree_data: result.tree_data,
+      mcts_debug_info: result.mcts_debug_info
+    });
+    return;
+  }
+
+  explorationDiv.style.display = 'none';
 }
 
 function getSnapshotHistoryKey(snapshot) {

@@ -71,18 +71,28 @@ CORS(app)
 # returned by the value head (tanh activated) and used by MCTS, as opposed to 'value_logits'
 # which were the old sigmoid-based outputs.
 
-# Add debug logging for incoming requests
+# Track request timing for concise API logs.
 @app.before_request
 def log_request_info():
-    app.logger.debug(f"Request: {request.method} {request.path}")
-    # Store start time for timing analysis
     request.start_time = time.time()
 
 @app.after_request
 def log_response_info(response):
     if hasattr(request, 'start_time'):
         request_time = time.time() - request.start_time
-        app.logger.info(f"HTTP Request/Response cycle: {request.method} {request.path} took {request_time:.3f}s")
+        if request.path.startswith("/api/"):
+            log_fn = (
+                app.logger.info
+                if response.status_code >= 400 or request_time >= 1.0
+                else app.logger.debug
+            )
+            log_fn(
+                "HTTP %s %s -> %s in %.3fs",
+                request.method,
+                request.path,
+                response.status_code,
+                request_time,
+            )
     return response
 
 # Global model browser instance
@@ -653,16 +663,154 @@ def _coerce_verbose_level(verbose):
         raise ValueError(f"Invalid verbose value: {verbose}") from exc
 
 
+def _trmph_log_tail(trmph, max_moves=6):
+    """Return a short tail summary for TRMPH logging."""
+    if not isinstance(trmph, str):
+        return "-"
+
+    tokens = [token for token in trmph.split() if token]
+    if not tokens:
+        return "-"
+
+    tail = " ".join(tokens[-max_moves:])
+    return tail if len(tokens) <= max_moves else f"... {tail}"
+
+
+def _format_log_value(value):
+    """Format simple values for concise structured logs."""
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    if isinstance(value, (list, tuple)):
+        return "[" + ",".join(_format_log_value(item) for item in value) + "]"
+    return str(value)
+
+
+def _log_engine_request_summary(engine_name, *, trmph, model_id, verbose, **params):
+    """Emit one concise request-summary log line for engine endpoints."""
+    parts = [f"model={model_id}"]
+    for key, value in params.items():
+        if value is None:
+            continue
+        parts.append(f"{key}={_format_log_value(value)}")
+
+    move_count = 0
+    if isinstance(trmph, str):
+        move_count = len([token for token in trmph.split() if token])
+
+    parts.append(f"verbose={verbose}")
+    parts.append(f"ply={move_count}")
+    parts.append(f"tail={_trmph_log_tail(trmph)}")
+    app.logger.info("%s request: %s", engine_name, ", ".join(parts))
+
+
+def _build_move_timing_summary(*, total_seconds, phases):
+    """Build compact timing payload used by logs and frontend debug output."""
+    total_seconds = max(0.0, float(total_seconds))
+    normalized_phases = []
+    measured_seconds = 0.0
+
+    for key, label, seconds in phases:
+        if seconds is None:
+            continue
+        seconds = max(0.0, float(seconds))
+        measured_seconds += seconds
+        normalized_phases.append(
+            {
+                "key": key,
+                "label": label,
+                "seconds": seconds,
+                "ms": int(round(seconds * 1000.0)),
+            }
+        )
+
+    remainder_seconds = max(0.0, total_seconds - measured_seconds)
+    if remainder_seconds >= 0.002:
+        normalized_phases.append(
+            {
+                "key": "other",
+                "label": "Other",
+                "seconds": remainder_seconds,
+                "ms": int(round(remainder_seconds * 1000.0)),
+            }
+        )
+
+    for phase in normalized_phases:
+        if total_seconds > 0:
+            phase["share_pct"] = (phase["seconds"] / total_seconds) * 100.0
+        else:
+            phase["share_pct"] = 0.0
+
+    dominant_phase = max(normalized_phases, key=lambda phase: phase["seconds"], default=None)
+    summary_parts = [
+        f"{phase['label'].lower()} {phase['seconds']:.3f}s"
+        for phase in normalized_phases
+        if phase["seconds"] >= 0.001
+    ]
+    summary_text = f"Move took {total_seconds:.3f}s total"
+    if summary_parts:
+        summary_text += "; " + ", ".join(summary_parts) + "."
+    else:
+        summary_text += "."
+
+    return {
+        "total_seconds": total_seconds,
+        "total_ms": int(round(total_seconds * 1000.0)),
+        "summary_text": summary_text,
+        "phases": normalized_phases,
+        "dominant_phase": dominant_phase,
+    }
+
+
+def _log_engine_result_summary(
+    engine_name,
+    *,
+    move,
+    game_over,
+    winner,
+    timing_summary,
+    extra_metrics=None,
+):
+    """Emit one concise result-summary log line for engine endpoints."""
+    parts = [
+        f"move={move or '-'}",
+        f"total={timing_summary['total_seconds']:.3f}s",
+    ]
+    for phase in timing_summary.get("phases", []):
+        if phase["key"] in {"setup", "search", "selection", "analysis", "response"}:
+            parts.append(f"{phase['key']}={phase['seconds']:.3f}s")
+
+    if extra_metrics:
+        for key, value in extra_metrics.items():
+            if value is None:
+                continue
+            parts.append(f"{key}={_format_log_value(value)}")
+
+    parts.append(f"game_over={game_over}")
+    if winner is not None:
+        parts.append(f"winner={winner}")
+
+    app.logger.info("%s result: %s", engine_name, ", ".join(parts))
+
+    dominant_phase = timing_summary.get("dominant_phase")
+    if dominant_phase is not None and app.logger.isEnabledFor(logging.DEBUG):
+        app.logger.debug(
+            "%s timing detail: dominant=%s %.3fs (%.1f%%)",
+            engine_name,
+            dominant_phase["label"],
+            dominant_phase["seconds"],
+            dominant_phase["share_pct"],
+        )
+
+
 def _build_game_over_engine_result(state, trmph, debug_field):
     """Return consistent game-over payload for engine move endpoints."""
-    app.logger.info("Game is over, returning current state")
+    app.logger.info("Engine request reached game-over state; no move generated")
     result = build_engine_move_response(
         state,
         new_trmph=trmph,
         move_made=None,
         additional_fields={debug_field: {}},
     )
-    app.logger.info(f"Returning early result: {result}")
     return result
 
 
@@ -720,7 +868,7 @@ def _load_model_or_error(model_id):
             reason="model_load_failed",
         )
 
-    app.logger.info(f"Model loaded successfully: {type(model).__name__}")
+    app.logger.debug("Model loaded successfully: %s", type(model).__name__)
     return model, None
 
 
@@ -737,32 +885,36 @@ def _build_legal_move_probabilities(state, policy_probs):
 
 def _compute_direct_policy_analysis(state, model, trmph, temperature):
     """Compute direct policy probabilities for legal moves and log summary."""
-    app.logger.info("Getting direct policy comparison...")
     policy_start = time.time()
     policy_logits, value_output = model.simple_infer(trmph)
     policy_time = time.time() - policy_start
-    app.logger.info(f"Direct policy inference took {policy_time:.3f}s")
 
     policy_probs = policy_logits_to_probs(policy_logits, temperature)
-    app.logger.info(f"Policy logits shape: {policy_logits.shape}, value_output: {value_output}")
-
     legal_moves = state.get_legal_moves()
     original_legal_moves_count = len(legal_moves)
-    app.logger.info(f"Legal moves count: {original_legal_moves_count}")
 
     legal_move_probs = _build_legal_move_probabilities(state, policy_probs)
-    sorted_moves = sorted(legal_move_probs.items(), key=lambda x: x[1], reverse=True)[:10]
-    top_moves_str = {move: f"{prob:.3f}" for move, prob in sorted_moves}
-    app.logger.info(f"Top 10 legal move probabilities: {top_moves_str}")
+    sorted_moves = sorted(legal_move_probs.items(), key=lambda x: x[1], reverse=True)[:5]
+    top_moves_str = ", ".join(f"{move}={prob:.3f}" for move, prob in sorted_moves) or "-"
+    app.logger.debug(
+        "Direct policy: time=%.3fs, legal=%s, value=%0.4f, top=%s",
+        policy_time,
+        original_legal_moves_count,
+        float(value_output),
+        top_moves_str,
+    )
 
-    return legal_move_probs, original_legal_moves_count, float(value_output)
+    return legal_move_probs, original_legal_moves_count, float(value_output), policy_time
 
 
 def _apply_selected_move(state, selected_move_trmph):
     """Apply selected move with consistent logging."""
-    app.logger.info(f"Applying move: {selected_move_trmph}")
     new_state = apply_move_to_state_trmph(state, selected_move_trmph)
-    app.logger.info(f"Move applied. New state game_over: {new_state.game_over}")
+    app.logger.debug(
+        "Applied move %s -> game_over=%s",
+        selected_move_trmph,
+        new_state.game_over,
+    )
     return new_state
 
 
@@ -1038,23 +1190,23 @@ def _build_mcts_debug_info(
     return mcts_debug_info
 
 
-def _log_mcts_timing_summary(stats, mcts_search_time):
-    """Emit summary logs for MCTS performance."""
-    forward_percentage = (
-        (stats.get("forward_ms", 0) / mcts_search_time / 10) if mcts_search_time > 0 else 0
-    )
-    app.logger.info("=== PERFORMANCE SUMMARY ===")
-    app.logger.info(f"Forward pass uses: {forward_percentage:.1f}% of total time")
-    app.logger.info(
-        f"Cache efficiency: {stats.get('cache_hits', 0)} hits, {stats.get('cache_misses', 0)} misses"
-    )
-    app.logger.info(
-        "Batch efficiency: %s batches, avg size %.1f",
+def _log_mcts_profile_debug(stats):
+    """Emit one concise debug-only MCTS profile line."""
+    if not app.logger.isEnabledFor(logging.DEBUG):
+        return
+
+    batch_sizes = stats.get("batch_sizes", [])
+    avg_batch_size = sum(batch_sizes) / max(1, len(batch_sizes))
+    app.logger.debug(
+        "MCTS profile: cache=%s/%s, batches=%s avg_batch=%.1f, sims_per_sec=%.1f, unique=%s/%s",
+        stats.get("cache_hits", 0),
+        stats.get("cache_misses", 0),
         stats.get("batch_count", 0),
-        sum(stats.get("batch_sizes", [0])) / max(1, len(stats.get("batch_sizes", []))),
+        avg_batch_size,
+        stats.get("simulations_per_second", 0),
+        stats.get("unique_evals_total", 0),
+        stats.get("effective_sims_total", 0),
     )
-    app.logger.info(f"Simulations per second: {stats.get('simulations_per_second', 0):.1f}")
-    app.logger.info("=== END PERFORMANCE SUMMARY ===")
 
 
 def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
@@ -1062,27 +1214,16 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
     """Make one computer move using MCTS and return the new state with diagnostics."""
     try:
         mcts_verbose = _coerce_verbose_level(verbose)
-        app.logger.info("=== MCTS MOVE START ===")
-        app.logger.info(
-            "Input: model_id=%s, sims=%s, temp=%s->%s, verbose=%s, gumbel=%s, gumbel_max_sims=%s",
-            model_id,
-            num_simulations,
-            temperature,
-            temperature_end,
-            mcts_verbose,
-            enable_gumbel,
-            gumbel_max_sims,
-        )
-        app.logger.info(f"Input TRMPH: {trmph}")
-
+        move_start_time = time.time()
+        state_parse_start = time.time()
         state = create_game_state_from_trmph(trmph, context="for MCTS move")
-        app.logger.info(
-            f"Game state created: game_over={state.game_over}, current_player={state.current_player_enum}"
-        )
+        state_parse_time = time.time() - state_parse_start
         if state.game_over:
             return _build_game_over_engine_result(state, trmph, "mcts_debug_info")
 
+        model_load_start = time.time()
         model, error_result = _load_model_or_error(model_id)
+        model_load_time = time.time() - model_load_start
         if error_result:
             return error_result
 
@@ -1096,18 +1237,10 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
             confidence_termination_threshold=INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD,
             logger=app.logger,
         )
-        app.logger.info(f"MCTS config created: {mcts_config}")
-
-        app.logger.info(f"Getting cached ModelWrapper for model_id={model_id}")
         model_wrapper_start = time.time()
         model_wrapper = get_cached_model_wrapper(model_id)
         model_wrapper_time = time.time() - model_wrapper_start
-        app.logger.info(f"ModelWrapper retrieval took {model_wrapper_time:.3f}s")
-
-        app.logger.info("Starting MCTS search...")
-        total_start_time = time.time()
         mcts_start_time = time.time()
-        app.logger.info("About to run interactive MCTS search...")
         selected_move, stats, tree_data, algorithm_termination_info = run_interactive_mcts_search(
             state=state,
             model_wrapper=model_wrapper,
@@ -1115,25 +1248,18 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
             verbose=mcts_verbose,
             logger=app.logger,
         )
-        app.logger.info("run_mcts_move completed successfully")
         mcts_search_time = time.time() - mcts_start_time
 
-        app.logger.debug("=== DETAILED TIMING BREAKDOWN ===")
-        app.logger.debug(f"MCTS search completed in {mcts_search_time:.3f}s")
-        app.logger.debug(f"Total wall time so far: {time.time() - total_start_time:.3f}s")
-        app.logger.debug(f"MCTS selected move: {selected_move}")
-        app.logger.debug(f"Simulations per second: {stats.get('simulations_per_second', 0):.2f}")
-        _log_mcts_timing_summary(stats, mcts_search_time)
-
         selected_move_trmph = fc.rowcol_to_trmph(*selected_move)
-        app.logger.info(f"Selected move TRMPH: {selected_move_trmph}")
 
         root_player = state.current_player_enum
-        legal_move_probs, original_legal_moves_count, root_value_head_signed = _compute_direct_policy_analysis(
+        legal_move_probs, original_legal_moves_count, root_value_head_signed, direct_policy_time = _compute_direct_policy_analysis(
             state, model, trmph, temperature
         )
         state = _apply_selected_move(state, selected_move_trmph)
+        selected_move_eval_start = time.time()
         _, selected_move_value_head_signed = model.simple_infer(state.to_trmph())
+        selected_move_eval_time = time.time() - selected_move_eval_start
 
         mcts_debug_info = _build_mcts_debug_info(
             stats=stats,
@@ -1155,6 +1281,7 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
             mcts_search_time=mcts_search_time,
         )
 
+        response_build_start = time.time()
         result = build_engine_move_response(
             state,
             new_trmph=state.to_trmph(),
@@ -1165,20 +1292,37 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
             },
         )
         _sanitize_numeric_debug_fields(result)
+        response_build_time = time.time() - response_build_start
 
-        total_wall_time = time.time() - total_start_time
-        post_mcts_time = total_wall_time - mcts_search_time
-        app.logger.debug("=== MCTS MOVE COMPLETE ===")
-        app.logger.debug("=== WALL TIME BREAKDOWN ===")
-        app.logger.debug(f"ModelWrapper retrieval: {model_wrapper_time:.3f}s")
-        app.logger.debug(f"MCTS search time: {mcts_search_time:.3f}s")
-        app.logger.debug(f"Post-MCTS processing: {post_mcts_time:.3f}s")
-        app.logger.debug(f"TOTAL WALL TIME: {total_wall_time:.3f}s")
-        app.logger.debug("=== END WALL TIME BREAKDOWN ===")
-        app.logger.debug(f"Final result keys: {list(result.keys())}")
-        app.logger.debug(f"Move made: {result['move_made']}")
-        app.logger.debug(f"Game over: {result['game_over']}")
-        app.logger.debug(f"Winner: {result['winner']}")
+        total_wall_time = time.time() - move_start_time
+        timing_summary = _build_move_timing_summary(
+            total_seconds=total_wall_time,
+            phases=[
+                ("setup", "Setup", state_parse_time + model_load_time + model_wrapper_time),
+                ("search", "Search", mcts_search_time),
+                ("analysis", "Policy analysis", direct_policy_time + selected_move_eval_time),
+                ("response", "Response", response_build_time),
+            ],
+        )
+        mcts_debug_info["timing_summary"] = timing_summary
+        if "profiling_summary" in mcts_debug_info:
+            mcts_debug_info["profiling_summary"]["wall_time_ms"] = timing_summary["total_ms"]
+
+        _log_engine_result_summary(
+            "MCTS",
+            move=result["move_made"],
+            game_over=result["game_over"],
+            winner=result["winner"],
+            timing_summary=timing_summary,
+            extra_metrics={
+                "algo": mcts_debug_info["algorithm_info"]["algorithm"],
+                "sims": stats.get("effective_sims_total", num_simulations),
+                "sps": stats.get("simulations_per_second", 0),
+                "nodes": tree_data.get("total_nodes"),
+                "depth": tree_data.get("max_depth"),
+            },
+        )
+        _log_mcts_profile_debug(stats)
 
         if "tree_data" in result and "detailed_exploration" in result["tree_data"]:
             de = result["tree_data"]["detailed_exploration"]
@@ -1190,15 +1334,6 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
             )
         else:
             app.logger.debug("No detailed exploration data found in tree_data")
-
-        try:
-            response_json = json.dumps(result)
-            response_size = len(response_json)
-            app.logger.debug(
-                f"Response JSON size: {response_size:,} bytes ({response_size/1024:.1f} KB)"
-            )
-        except Exception as e:
-            app.logger.warning(f"Could not serialize response for size measurement: {e}")
 
         return result
     except Exception as e:
@@ -1308,20 +1443,16 @@ def _build_fixed_tree_debug_info(
 def make_fixed_tree_move(trmph, model_id, search_widths, temperature, verbose):
     """Make one computer move using Fixed Tree Search and return the new state with diagnostics."""
     try:
-        app.logger.info("=== FIXED TREE MOVE START ===")
-        app.logger.info(
-            f"Input: model_id={model_id}, search_widths={search_widths}, temp={temperature}, verbose={verbose}"
-        )
-        app.logger.info(f"Input TRMPH: {trmph}")
-
+        move_start_time = time.time()
+        state_parse_start = time.time()
         state = create_game_state_from_trmph(trmph, context="for Fixed Tree move")
-        app.logger.info(
-            f"Game state created: game_over={state.game_over}, current_player={state.current_player_enum}"
-        )
+        state_parse_time = time.time() - state_parse_start
         if state.game_over:
             return _build_game_over_engine_result(state, trmph, "fixed_tree_debug_info")
 
+        model_load_start = time.time()
         model, error_result = _load_model_or_error(model_id)
+        model_load_time = time.time() - model_load_start
         if error_result:
             return error_result
 
@@ -1334,15 +1465,9 @@ def make_fixed_tree_move(trmph, model_id, search_widths, temperature, verbose):
             enable_early_termination=False,
             early_termination_threshold=0.95,
         )
-        app.logger.info(f"Fixed tree config created: {search_config}")
-
-        app.logger.info("Starting Fixed Tree Search...")
-        total_start_time = time.time()
         search_start_time = time.time()
-        app.logger.info("About to call run_fixed_tree_search...")
         try:
             search_result = run_fixed_tree_search(state, model, search_config, verbose)
-            app.logger.info("run_fixed_tree_search completed successfully")
         except Exception as e:
             app.logger.error(f"run_fixed_tree_search failed with exception: {e}")
             import traceback
@@ -1351,28 +1476,9 @@ def make_fixed_tree_move(trmph, model_id, search_widths, temperature, verbose):
         search_time = time.time() - search_start_time
         stats = search_result.stats
 
-        app.logger.debug("=== DETAILED TIMING BREAKDOWN ===")
-        app.logger.debug(f"Fixed tree search completed in {search_time:.3f}s")
-        app.logger.debug(f"Total wall time so far: {time.time() - total_start_time:.3f}s")
-        app.logger.debug(f"Fixed tree selected move: {search_result.move}")
-        app.logger.debug(f"Total positions: {stats.get('total_positions', 0)}")
-        app.logger.debug(f"Policy evaluations: {stats.get('policy_evaluations', 0)}")
-        app.logger.debug(f"Value evaluations: {stats.get('value_evaluations', 0)}")
-        app.logger.debug(f"Tree depth: {stats.get('tree_depth', 0)}")
-        app.logger.debug(f"Tree width: {stats.get('tree_width', 0)}")
-        app.logger.debug(f"Memory usage: {stats.get('memory_usage_mb', 0):.1f}MB")
-
-        app.logger.info("=== PERFORMANCE SUMMARY ===")
-        app.logger.info(f"Total positions evaluated: {stats.get('total_positions', 0)}")
-        app.logger.info(f"Search time: {search_time:.3f}s")
-        app.logger.info(f"Tree depth: {stats.get('tree_depth', 0)}, max width: {stats.get('tree_width', 0)}")
-        app.logger.info(f"Memory usage: {stats.get('memory_usage_mb', 0):.1f}MB")
-        app.logger.info("=== END PERFORMANCE SUMMARY ===")
-
         selected_move_trmph = fc.rowcol_to_trmph(*search_result.move)
-        app.logger.info(f"Selected move TRMPH: {selected_move_trmph}")
 
-        legal_move_probs, original_legal_moves_count, _ = _compute_direct_policy_analysis(
+        legal_move_probs, original_legal_moves_count, _, direct_policy_time = _compute_direct_policy_analysis(
             state, model, trmph, temperature
         )
         state = _apply_selected_move(state, selected_move_trmph)
@@ -1388,6 +1494,7 @@ def make_fixed_tree_move(trmph, model_id, search_widths, temperature, verbose):
             original_legal_moves_count=original_legal_moves_count,
         )
 
+        response_build_start = time.time()
         result_data = build_engine_move_response(
             state,
             new_trmph=state.to_trmph(),
@@ -1398,19 +1505,35 @@ def make_fixed_tree_move(trmph, model_id, search_widths, temperature, verbose):
             },
         )
         _sanitize_numeric_debug_fields(result_data)
+        response_build_time = time.time() - response_build_start
 
-        total_wall_time = time.time() - total_start_time
-        post_search_time = total_wall_time - search_time
-        app.logger.debug("=== FIXED TREE MOVE COMPLETE ===")
-        app.logger.debug("=== WALL TIME BREAKDOWN ===")
-        app.logger.debug(f"Fixed tree search time: {search_time:.3f}s")
-        app.logger.debug(f"Post-search processing: {post_search_time:.3f}s")
-        app.logger.debug(f"TOTAL WALL TIME: {total_wall_time:.3f}s")
-        app.logger.debug("=== END WALL TIME BREAKDOWN ===")
-        app.logger.debug(f"Final result keys: {list(result_data.keys())}")
-        app.logger.debug(f"Move made: {result_data['move_made']}")
-        app.logger.debug(f"Game over: {result_data['game_over']}")
-        app.logger.debug(f"Winner: {result_data['winner']}")
+        total_wall_time = time.time() - move_start_time
+        timing_summary = _build_move_timing_summary(
+            total_seconds=total_wall_time,
+            phases=[
+                ("setup", "Setup", state_parse_time + model_load_time),
+                ("search", "Search", search_time),
+                ("analysis", "Policy analysis", direct_policy_time),
+                ("response", "Response", response_build_time),
+            ],
+        )
+        fixed_tree_debug_info["timing_summary"] = timing_summary
+        if "profiling_summary" in fixed_tree_debug_info:
+            fixed_tree_debug_info["profiling_summary"]["wall_time_ms"] = timing_summary["total_ms"]
+
+        _log_engine_result_summary(
+            "FixedTree",
+            move=result_data["move_made"],
+            game_over=result_data["game_over"],
+            winner=result_data["winner"],
+            timing_summary=timing_summary,
+            extra_metrics={
+                "positions": stats.get("total_positions", 0),
+                "depth": stats.get("tree_depth", 0),
+                "width": stats.get("tree_width", 0),
+                "mem_mb": stats.get("memory_usage_mb", 0.0),
+            },
+        )
         return result_data
     except Exception as e:
         app.logger.error("=== FIXED TREE MOVE ERROR ===")
@@ -2023,10 +2146,7 @@ def _validate_fixed_tree_search_widths(search_widths):
 def api_policy_move():
     """Make a computer move using policy sampling."""
     data = request.get_json()
-    app.logger.info("=== POLICY API CALL ===")
-    app.logger.info(f"Request data: {data}")
-    
-    # Validate input
+
     validated_data, inline_heatmap_options, error_response = _validate_engine_request(
         data,
         required_fields=["trmph"],
@@ -2049,16 +2169,28 @@ def api_policy_move():
                 reason="validation_error",
             )
         ), 400
-    
-    app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, temp={temperature}, verbose={verbose}")
+
+    _log_engine_request_summary(
+        "Policy",
+        trmph=trmph,
+        model_id=model_id,
+        temperature=temperature,
+        verbose=verbose,
+    )
     
     try:
-        # Parse TRMPH and get game state
+        move_start_time = time.time()
+        state_parse_start = time.time()
         state = create_game_state_from_trmph(trmph, context="for policy move")
-        
-        # Get model and make policy move
+        state_parse_time = time.time() - state_parse_start
+
+        model_load_start = time.time()
         model = get_model(model_id)
+        model_load_time = time.time() - model_load_start
+
+        selection_start = time.time()
         move = select_policy_move(state, model, temperature)
+        selection_time = time.time() - selection_start
         
         if move is None:
             return jsonify(
@@ -2068,26 +2200,24 @@ def api_policy_move():
                 )
             ), 400
         
-        # Apply the move
         move_trmph = fc.rowcol_to_trmph(move[0], move[1])
         new_state = apply_move_to_state_trmph(state, move_trmph)
         new_trmph = new_state.to_trmph()
         
-        # Get policy information for debug output
+        analysis_start = time.time()
         policy_logits, value_signed = model.simple_infer(trmph)
         policy_probs = policy_logits_to_probs(policy_logits, temperature)
         legal_moves = state.get_legal_moves()
         legal_policy = get_legal_policy_probs(policy_probs, legal_moves, state.board.shape[0])
+        analysis_time = time.time() - analysis_start
         
-        # Create policy dictionary for debug
         policy_dict = {}
         for i, (row, col) in enumerate(legal_moves):
             trmph_move = fc.rowcol_to_trmph(row, col)
             policy_dict[trmph_move] = float(legal_policy[i])
         
-        # Sort by probability for debug output
         sorted_policy = sorted(policy_dict.items(), key=lambda x: x[1], reverse=True)
-        
+        response_build_start = time.time()
         result = build_engine_move_response(
             new_state,
             new_trmph=new_trmph,
@@ -2096,11 +2226,24 @@ def api_policy_move():
                 "policy_info": {
                     "selected_move": move_trmph,
                     "selected_probability": policy_dict.get(move_trmph, 0.0),
-                    "top_moves": sorted_policy[:5],  # Top 5 moves for debug
+                    "top_moves": sorted_policy[:5],
                     "temperature": temperature,
                 },
             },
         )
+        response_build_time = time.time() - response_build_start
+
+        total_wall_time = time.time() - move_start_time
+        timing_summary = _build_move_timing_summary(
+            total_seconds=total_wall_time,
+            phases=[
+                ("setup", "Setup", state_parse_time + model_load_time),
+                ("selection", "Selection", selection_time),
+                ("analysis", "Policy analysis", analysis_time),
+                ("response", "Response", response_build_time),
+            ],
+        )
+        result["policy_info"]["timing_summary"] = timing_summary
         
         if verbose >= 1:
             result["debug_info"] = {
@@ -2110,6 +2253,7 @@ def api_policy_move():
                         "temperature": temperature
                     }
                 },
+                "timing_summary": timing_summary,
                 "policy_analysis": {
                     "top_moves": sorted_policy[:10],
                     "total_legal_moves": len(legal_moves)
@@ -2122,9 +2266,19 @@ def api_policy_move():
             model_id=model_id,
             state=new_state,
         )
-        
-        app.logger.info("=== POLICY API RESPONSE ===")
-        app.logger.info(f"Selected move: {move_trmph} (prob: {policy_dict.get(move_trmph, 0.0):.3f})")
+
+        _log_engine_result_summary(
+            "Policy",
+            move=move_trmph,
+            game_over=result["game_over"],
+            winner=result["winner"],
+            timing_summary=timing_summary,
+            extra_metrics={
+                "selected_p": policy_dict.get(move_trmph, 0.0),
+                "legal": len(legal_moves),
+                "value": float(value_signed),
+            },
+        )
         
         return jsonify(result)
     except ModelResolutionError as e:
@@ -2143,10 +2297,7 @@ def api_policy_move():
 def api_mcts_move():
     """Make a computer move using MCTS with diagnostic output."""
     data = request.get_json()
-    app.logger.info("=== MCTS API CALL ===")
-    app.logger.info(f"Request data: {data}")
-    
-    # Validate input
+
     validated_data, inline_heatmap_options, error_response = _validate_engine_request(
         data,
         required_fields=["trmph"],
@@ -2186,8 +2337,18 @@ def api_mcts_move():
     enable_gumbel = validated_data.get("enable_gumbel", True)
     gumbel_max_sims = validated_data.get("gumbel_max_sims", 500)
     pie_rule_enabled = validated_data.get("pie_rule_enabled", DEFAULT_PIE_RULE_ENABLED)
-    
-    app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, sims={num_simulations}, temp={temperature}->{temperature_end}, verbose={verbose}, gumbel={enable_gumbel}, gumbel_max_sims={gumbel_max_sims}")
+
+    _log_engine_request_summary(
+        "MCTS",
+        trmph=trmph,
+        model_id=model_id,
+        sims=num_simulations,
+        temp=f"{temperature}->{temperature_end}",
+        gumbel=enable_gumbel,
+        gumbel_max_sims=gumbel_max_sims,
+        pie_rule=pie_rule_enabled,
+        verbose=verbose,
+    )
 
     opening_choice = None
     opening_state = None
@@ -2258,22 +2419,6 @@ def api_mcts_move():
         model_id=model_id,
     )
     
-    app.logger.info("=== MCTS API RESPONSE ===")
-    app.logger.info(f"Result success: {result.get('success', 'MISSING')}")
-    if result.get('success'):
-        app.logger.info(f"Result keys: {list(result.keys())}")
-        app.logger.info(f"Move made: {result.get('move_made', 'MISSING')}")
-        app.logger.info(f"Game over: {result.get('game_over', 'MISSING')}")
-        app.logger.info(f"Winner: {result.get('winner', 'MISSING')}")
-        # Log a few key numeric values that might be causing the toFixed error
-        if 'mcts_debug_info' in result:
-            debug_info = result['mcts_debug_info']
-            if 'profiling_summary' in debug_info:
-                profiling = debug_info['profiling_summary']
-                app.logger.info(f"Profiling values: {profiling}")
-    else:
-        app.logger.error(f"Result error: {result.get('error', 'MISSING')}")
-    
     status_code = 200 if result.get("success") else 500
     return jsonify(result), status_code
 
@@ -2281,9 +2426,6 @@ def api_mcts_move():
 def api_fixed_tree_move():
     """Make a computer move using Fixed Tree Search with diagnostic output."""
     data = request.get_json()
-    app.logger.info("=== FIXED TREE API CALL ===")
-    app.logger.info(f"Request data: {data}")
-    
     validated_data, inline_heatmap_options, error_response = _validate_engine_request(
         data,
         required_fields=["trmph", "search_widths"],
@@ -2307,8 +2449,15 @@ def api_fixed_tree_move():
                 reason="validation_error",
             )
         ), 400
-    
-    app.logger.info(f"Parsed parameters: trmph={trmph[:50]}..., model_id={model_id}, search_widths={search_widths}, temp={temperature}, verbose={verbose}")
+
+    _log_engine_request_summary(
+        "FixedTree",
+        trmph=trmph,
+        model_id=model_id,
+        widths=search_widths,
+        temperature=temperature,
+        verbose=verbose,
+    )
     
     try:
         search_widths = _validate_fixed_tree_search_widths(search_widths)
@@ -2334,22 +2483,6 @@ def api_fixed_tree_move():
         inline_heatmap_options=inline_heatmap_options,
         model_id=model_id,
     )
-    
-    app.logger.info("=== FIXED TREE API RESPONSE ===")
-    app.logger.info(f"Result success: {result.get('success', 'MISSING')}")
-    if result.get('success'):
-        app.logger.info(f"Result keys: {list(result.keys())}")
-        app.logger.info(f"Move made: {result.get('move_made', 'MISSING')}")
-        app.logger.info(f"Game over: {result.get('game_over', 'MISSING')}")
-        app.logger.info(f"Winner: {result.get('winner', 'MISSING')}")
-        # Log a few key numeric values that might be causing issues
-        if 'fixed_tree_debug_info' in result:
-            debug_info = result['fixed_tree_debug_info']
-            if 'profiling_summary' in debug_info:
-                profiling = debug_info['profiling_summary']
-                app.logger.info(f"Profiling values: {profiling}")
-    else:
-        app.logger.error(f"Result error: {result.get('error', 'MISSING')}")
     
     status_code = 200 if result.get("success") else 500
     return jsonify(result), status_code
