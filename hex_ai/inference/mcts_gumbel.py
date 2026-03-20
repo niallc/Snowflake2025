@@ -709,7 +709,7 @@ class MCTSGumbelMixin:
         timing_tracker.end_timing("gumbel_final_conversion")
         timing_tracker.end_timing("gumbel_selection")
 
-        if verbose >= 2:
+        if verbose >= 5:
             print(f"Gumbel selection completed. Selected tensor action {selected_tensor_action} "
                   f"-> legal action {selected_action} ({root.legal_moves[selected_action]})")
 
@@ -796,7 +796,7 @@ class MCTSGumbelMixin:
         self._record_gumbel_metrics(gumbel_metrics)
         self._record_required_gumbel_target_fields(gumbel_metrics)
         self._merge_forced_round_stats_into_timing_tracker(timing_tracker, gumbel_metrics)
-        if verbose >= 4:
+        if verbose >= 5:
             print(f"Gumbel root: fixed temperature={DEFAULT_GUMBEL_ROOT_TEMPERATURE:.3f}")
         timing_tracker.end_timing("gumbel_algorithm")
 

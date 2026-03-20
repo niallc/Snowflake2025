@@ -328,7 +328,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         )
         self.exploration_trace = []
         self.simulation_count = 0
-        if self.detailed_exploration_enabled and verbose_level >= 2:
+        if self.detailed_exploration_enabled and verbose_level >= 5:
             print(f"🔍 Enabling detailed MCTS exploration tracking for {num_simulations} simulations")
 
     def _record_descent_start(self, sim: int, root_visits: int, gumbel_forced: bool, pv_hint: Optional[List[str]] = None) -> None:
@@ -1935,7 +1935,7 @@ class BaselineMCTS(MCTSGumbelMixin):
             # Use top policy move
             best_move_idx = int(np.argmax(root.P))
             best_move = root.legal_moves[best_move_idx]
-            if verbose >= 2:
+            if verbose >= 5:
                 print(
                     "🎮 MCTS: Using top policy move "
                     f"(confidence-based termination, win probability: {termination_info.win_probability:.3f}): "
@@ -1957,7 +1957,7 @@ class BaselineMCTS(MCTSGumbelMixin):
             raise RuntimeError("Gumbel root selection marked as used, but no selected action was recorded.")
 
         selected_move = root.legal_moves[selected_action]
-        if verbose >= 2:
+        if verbose >= 5:
             print(f"🎮 MCTS: Using Gumbel-selected move: {selected_move}")
 
         move_probs = calculate_policy_probs(root, root_state, self.cfg, self)
@@ -1977,7 +1977,7 @@ class BaselineMCTS(MCTSGumbelMixin):
             return None
 
         terminal_move = root.legal_moves[terminal_indices[0]]
-        if verbose >= 2:
+        if verbose >= 5:
             print(f"🎮 MCTS: Using pre-detected terminal move: {terminal_move}")
         move_probs = calculate_visit_count_probs(root, root_state, self.cfg)
         return terminal_move, move_probs
@@ -1999,7 +1999,7 @@ class BaselineMCTS(MCTSGumbelMixin):
             )
         temp = self._root_temperature(move_count, root.board_size)
 
-        if verbose >= 4:
+        if verbose >= 5:
             top_k_info = f", top-k={self.cfg.visit_sampling_top_k}" if self.cfg.visit_sampling_top_k > 0 else ""
             print(f"🎮 MCTS: Move {move_count}, effective temperature: {temp:.3f}{top_k_info}")
 

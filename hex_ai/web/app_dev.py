@@ -81,11 +81,7 @@ def log_response_info(response):
     if hasattr(request, 'start_time'):
         request_time = time.time() - request.start_time
         if request.path.startswith("/api/"):
-            log_fn = (
-                app.logger.info
-                if response.status_code >= 400 or request_time >= 1.0
-                else app.logger.debug
-            )
+            log_fn = app.logger.warning if response.status_code >= 400 else app.logger.debug
             log_fn(
                 "HTTP %s %s -> %s in %.3fs",
                 request.method,
@@ -654,6 +650,10 @@ ENGINE_NUMERIC_DEBUG_FIELDS = {
     "efficiency_gain_percent",
 }
 
+OPTIONAL_NUMERIC_DEBUG_PATHS = {
+    "mcts_debug_info.algorithm_info.early_termination_details.win_probability",
+}
+
 
 def _coerce_verbose_level(verbose):
     """Parse verbose flag into an integer level."""
@@ -700,7 +700,7 @@ def _log_engine_request_summary(engine_name, *, trmph, model_id, verbose, **para
     parts.append(f"verbose={verbose}")
     parts.append(f"ply={move_count}")
     parts.append(f"tail={_trmph_log_tail(trmph)}")
-    app.logger.info("%s request: %s", engine_name, ", ".join(parts))
+    app.logger.debug("%s request: %s", engine_name, ", ".join(parts))
 
 
 def _build_move_timing_summary(*, total_seconds, phases):
@@ -800,6 +800,44 @@ def _log_engine_result_summary(
             dominant_phase["seconds"],
             dominant_phase["share_pct"],
         )
+
+
+def _log_mcts_result_summary(
+    *,
+    move,
+    algorithm,
+    sims,
+    sps,
+    timing_summary,
+    nodes,
+    depth,
+    game_over,
+    winner,
+):
+    """Emit the compact multiline MCTS summary used during interactive play."""
+    timing_parts = [f"total={timing_summary['total_seconds']:.3f}s"]
+    for phase in timing_summary.get("phases", []):
+        if phase["key"] in {"setup", "search", "analysis", "response"}:
+            timing_parts.append(f"{phase['key']}={phase['seconds']:.3f}s")
+    if sps is not None:
+        timing_parts.append(f"sps={_format_log_value(sps)}")
+
+    tree_parts = []
+    if nodes is not None:
+        tree_parts.append(f"nodes={_format_log_value(nodes)}")
+    if depth is not None:
+        tree_parts.append(f"depth={_format_log_value(depth)}")
+    tree_parts.append(f"game_over={_format_log_value(game_over)}")
+    if winner is not None:
+        tree_parts.append(f"winner={_format_log_value(winner)}")
+
+    lines = [
+        f"MCTS result: algo={algorithm}, sims={_format_log_value(sims)}",
+        f"Move={move or '-'}",
+        "Timing: " + ", ".join(timing_parts),
+        "Tree: " + ", ".join(tree_parts),
+    ]
+    app.logger.info("\n".join(lines))
 
 
 def _build_game_over_engine_result(state, trmph, debug_field):
@@ -925,6 +963,8 @@ def _sanitize_numeric_debug_fields(obj, path=""):
             current_path = f"{path}.{key}" if path else key
             if key in ENGINE_NUMERIC_DEBUG_FIELDS:
                 if value is None:
+                    if current_path in OPTIONAL_NUMERIC_DEBUG_PATHS:
+                        continue
                     app.logger.warning(
                         f"Found None value in numeric field {current_path}, replacing with 0.0"
                     )
@@ -1308,19 +1348,16 @@ def make_mcts_move(trmph, model_id, num_simulations, exploration_constant,
         if "profiling_summary" in mcts_debug_info:
             mcts_debug_info["profiling_summary"]["wall_time_ms"] = timing_summary["total_ms"]
 
-        _log_engine_result_summary(
-            "MCTS",
+        _log_mcts_result_summary(
             move=result["move_made"],
+            algorithm=mcts_debug_info["algorithm_info"]["algorithm"],
+            sims=stats.get("effective_sims_total", num_simulations),
+            sps=stats.get("simulations_per_second", 0),
+            timing_summary=timing_summary,
+            nodes=tree_data.get("total_nodes"),
+            depth=tree_data.get("max_depth"),
             game_over=result["game_over"],
             winner=result["winner"],
-            timing_summary=timing_summary,
-            extra_metrics={
-                "algo": mcts_debug_info["algorithm_info"]["algorithm"],
-                "sims": stats.get("effective_sims_total", num_simulations),
-                "sps": stats.get("simulations_per_second", 0),
-                "nodes": tree_data.get("total_nodes"),
-                "depth": tree_data.get("max_depth"),
-            },
         )
         _log_mcts_profile_debug(stats)
 
@@ -2626,7 +2663,11 @@ if __name__ == "__main__":
     log_level_name = os.getenv("SF25_DEV_WEB_LOG_LEVEL", default_log_level).upper()
     log_level = getattr(logging, log_level_name, logging.INFO)
     
-    logging.basicConfig(level=log_level)
+    logging.basicConfig(level=log_level, force=True)
+    app.logger.handlers.clear()
+    app.logger.setLevel(log_level)
+    app.logger.propagate = True
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
     app.logger.info("=" * 50)
     app.logger.info("Hex AI Web Server Starting...")
     app.logger.info("Debug mode: %s", debug_enabled)

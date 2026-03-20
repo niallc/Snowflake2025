@@ -80,7 +80,7 @@ def run_interactive_mcts_search(
     Run one interactive MCTS search and return raw outputs from `run_mcts_move`.
     """
     if logger is not None:
-        logger.info("Creating game engine")
+        logger.debug("Creating game engine")
     engine = HexGameEngine()
 
     if logger is not None:
