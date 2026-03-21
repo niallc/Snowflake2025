@@ -29,7 +29,10 @@ from hex_ai.web.model_browser import create_model_browser
 from hex_ai.file_utils import add_recent_model
 from hex_ai.inference.model_config import get_model_path, get_all_model_info, is_valid_model_id
 from hex_ai.inference.model_cache import get_model_cache
-from hex_ai.web.web_config import INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD
+from hex_ai.web.web_config import (
+    INTERACTIVE_CONFIDENCE_TERMINATION_THRESHOLD,
+    INTERACTIVE_DEFAULT_MCTS_NUM_SIMULATIONS,
+)
 from hex_ai.web.move_heatmap import (
     build_policy_value_heatmap,
     parse_move_heatmap_request_params,
@@ -1590,6 +1593,7 @@ def api_constants():
         "BOARD_SIZE": BOARD_SIZE,
         "DEFAULT_DISPLAY_BOARD_SIZE": BOARD_SIZE,
         "DISPLAY_BOARD_SIZE_OPTIONS": [BOARD_SIZE],
+        "INTERACTIVE_DEFAULT_MCTS_NUM_SIMULATIONS": INTERACTIVE_DEFAULT_MCTS_NUM_SIMULATIONS,
         "TRMPH_ALLOWED_URL_PREFIXES": TRMPH_ALLOWED_URL_PREFIXES,
         "PIECE_VALUES": {
             "EMPTY": Piece.EMPTY.value,
@@ -2357,7 +2361,10 @@ def api_mcts_move():
     trmph = validated_data.get("trmph")
     model_id = validated_data.get("model_id", "best")
     _ensure_requested_dynamic_model_registered(model_id, validated_data.get("model_path"))
-    num_simulations = validated_data.get("num_simulations", 200)
+    num_simulations = validated_data.get(
+        "num_simulations",
+        INTERACTIVE_DEFAULT_MCTS_NUM_SIMULATIONS,
+    )
     exploration_constant = validated_data.get("exploration_constant", 2.8)
     temperature = validated_data.get("temperature", 1.0)
     temperature_end = validated_data.get("temperature_end", 0.1)  # Default final temperature

@@ -113,6 +113,8 @@ const COLORS = {
   get RED_WINNING_PIECE() { return getColors().VERY_DARK_RED; },
 };
 
+const DEFAULT_INTERACTIVE_MCTS_NUM_SIMULATIONS = 600;
+
 // --- State ---
 let state = {
   trmph: `#13,`,
@@ -132,8 +134,8 @@ let state = {
   blue_fixed_tree_temperature: 1.0,
   red_fixed_tree_temperature: 1.0,
   // MCTS settings
-  blue_num_simulations: 39,
-  red_num_simulations: 39,
+  blue_num_simulations: DEFAULT_INTERACTIVE_MCTS_NUM_SIMULATIONS,
+  red_num_simulations: DEFAULT_INTERACTIVE_MCTS_NUM_SIMULATIONS,
   blue_exploration_constant: 2.9,
   red_exploration_constant: 2.9,
   // Gumbel settings
@@ -194,7 +196,7 @@ const userModifiedSettings = {
 // Smart defaults for different modes
 const SMART_DEFAULTS = {
   gumbel: {
-    num_simulations: 38,
+    num_simulations: DEFAULT_INTERACTIVE_MCTS_NUM_SIMULATIONS,
     temperature: 1.0
   },
   mcts: {
@@ -233,6 +235,29 @@ function getConfiguredBoardSize() {
   }
 
   return 13;
+}
+
+function getInteractiveDefaultMctsNumSimulations() {
+  const configured = Number(
+    state &&
+      state.constants &&
+      state.constants.INTERACTIVE_DEFAULT_MCTS_NUM_SIMULATIONS
+  );
+  if (Number.isFinite(configured) && configured > 0) {
+    return configured;
+  }
+  return DEFAULT_INTERACTIVE_MCTS_NUM_SIMULATIONS;
+}
+
+function applyInteractiveMctsSimulationDefault(numSimulations) {
+  state.blue_num_simulations = numSimulations;
+  state.red_num_simulations = numSimulations;
+  SMART_DEFAULTS.gumbel.num_simulations = numSimulations;
+
+  const blueNumSimulations = document.getElementById('blue-num-simulations');
+  const redNumSimulations = document.getElementById('red-num-simulations');
+  if (blueNumSimulations) blueNumSimulations.value = numSimulations;
+  if (redNumSimulations) redNumSimulations.value = numSimulations;
 }
 
 function buildEmptyTrmph() {
@@ -1462,6 +1487,7 @@ function stopAutoStep() {
 document.addEventListener('DOMContentLoaded', async () => {
   // Initialize dark mode first
   initializeDarkMode();
+  applyInteractiveMctsSimulationDefault(getInteractiveDefaultMctsNumSimulations());
   
   // Verify detailed exploration elements exist (quiet check)
   const explorationDiv = document.getElementById('detailed-exploration');
@@ -1514,6 +1540,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     state.constants = constantsResult;
+    applyInteractiveMctsSimulationDefault(getInteractiveDefaultMctsNumSimulations());
     console.log('Loadedx game constants:', GAME_CONSTANTS);
   } catch (err) {
     console.error('Failed to load constants, using defaults:', err);
