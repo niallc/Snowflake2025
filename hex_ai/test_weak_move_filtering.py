@@ -5,6 +5,7 @@ import numpy as np
 from hex_ai.enums import Piece
 from hex_ai.inference.game_engine import HexGameState
 from hex_ai.inference.mcts import BaselineMCTS
+from hex_ai.utils.format_conversion import trmph_move_to_rowcol
 from hex_ai.utils.weaks_cells import (
     PolicyOrderedMoveFilterResult,
     _RING_OFFSETS,
@@ -40,6 +41,16 @@ def _set_ring_tokens(
 def _classify_trmph_f4(trmph: str, player_color: str) -> WeakMoveClassification:
     state = HexGameState.from_trmph(trmph)
     return classify_weak_move(state.board, 3, 5, player_color=player_color)
+
+
+def _classify_trmph_move(
+    trmph: str,
+    move: str,
+    player_color: str,
+) -> WeakMoveClassification:
+    state = HexGameState.from_trmph(trmph)
+    row, col = trmph_move_to_rowcol(move, board_size=state.board.shape[0])
+    return classify_weak_move(state.board, row, col, player_color=player_color)
 
 
 def test_classify_weak_move_detects_dead_d1_on_interior_cell():
@@ -162,6 +173,61 @@ def test_example3_f4_is_v1_vulnerable_for_red_and_safe_for_blue():
     assert blue.status == _WEAK_MOVE_STATUS_SAFE
     assert blue.reasons == ()
     assert blue.vulnerable_reply_moves == ()
+
+
+def test_move19_example_d8_is_v3_vulnerable_for_blue():
+    blue = _classify_trmph_move(
+        "#13,a2g7i8i6j6j4d10g5d7e4c6c5f4d9b6e8f8f7",
+        "d8",
+        "b",
+    )
+
+    assert blue.status == _WEAK_MOVE_STATUS_VULNERABLE
+    assert blue.reasons == (_RULE_V3,)
+    assert blue.vulnerable_reply_moves == ((8, 2),)
+
+
+def test_move24_example_e5_is_v2_v3_vulnerable_for_red():
+    red = _classify_trmph_move(
+        "#13,a2g7i8i6j6j4d10i10e7e6d7d6l3c9j9i3f5g4e4g6i4k5b10",
+        "e5",
+        "r",
+    )
+
+    assert red.status == _WEAK_MOVE_STATUS_VULNERABLE
+    assert red.reasons == (_RULE_V2, _RULE_V3)
+    assert red.vulnerable_reply_moves == ((3, 5),)
+
+
+def test_move29_example_a8_and_a9_are_vulnerable_for_blue():
+    trmph = "#13,a2g7i8i6j6j4d10g5d7e4c6c5f4d9b6e8f8f7c10c9b10b8b9c8k4j7k6i7"
+    a8 = _classify_trmph_move(trmph, "a8", "b")
+    a9 = _classify_trmph_move(trmph, "a9", "b")
+
+    assert a8.status == _WEAK_MOVE_STATUS_VULNERABLE
+    assert a8.reasons == (_RULE_V1,)
+    assert a8.vulnerable_reply_moves == ((8, 0),)
+
+    assert a9.status == _WEAK_MOVE_STATUS_VULNERABLE
+    assert a9.reasons == (_RULE_V1, _RULE_V3)
+    assert a9.vulnerable_reply_moves == ((7, 0),)
+
+
+def test_move39_example_m9_and_h7_are_vulnerable_for_blue():
+    trmph = (
+        "#13,a2g7i8i6j6j4d10g5d7e4c6c5f4d9b6e8f8f7c10c9b10b8b9c8"
+        "k4j7k6i7k7j8k8k10i1j9k9j10l9l10"
+    )
+    m9 = _classify_trmph_move(trmph, "m9", "b")
+    h7 = _classify_trmph_move(trmph, "h7", "b")
+
+    assert m9.status == _WEAK_MOVE_STATUS_VULNERABLE
+    assert m9.reasons == (_RULE_V1, _RULE_V3)
+    assert m9.vulnerable_reply_moves == ((9, 12),)
+
+    assert h7.status == _WEAK_MOVE_STATUS_VULNERABLE
+    assert h7.reasons == (_RULE_V1,)
+    assert h7.vulnerable_reply_moves == ((5, 7),)
 
 
 def test_select_policy_ordered_weak_moves_keeps_all_safe_and_filters_vulnerable_when_safe_exists():

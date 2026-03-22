@@ -240,7 +240,8 @@ Examples:
         type=str,
         help=(
             "Optional JSONL path for root dead-cell pruning debug records. "
-            "When set, masked MCTS strategies append state snapshots and triggering rules."
+            "When set, masked MCTS strategies write state snapshots and triggering rules. "
+            "Any existing file at that path is cleared when the run starts."
         ),
     )
     parser.add_argument(
@@ -258,7 +259,8 @@ Examples:
         help=(
             "Optional JSONL path for root counterfactual debug records. "
             "When set for masked MCTS, each move also runs an unmasked root probe "
-            "and logs cases where unmasked MCTS would choose a masked move."
+            "and logs cases where unmasked MCTS would choose a masked move. "
+            "Any existing file at that path is cleared when the run starts."
         ),
     )
     parser.add_argument('--temperature', type=float, default=DEFAULT_TEMPERATURE,
@@ -1636,6 +1638,17 @@ def _apply_dead_cell_debug_logging_to_strategies(
         f"{args.dead_cell_debug_max_records_per_move} "
         "(0 means unlimited)"
     )
+    _reset_debug_jsonl_path(args.dead_cell_debug_log_path, label="dead-cell debug")
+
+
+def _reset_debug_jsonl_path(path_text: str, *, label: str) -> None:
+    """Clear a prior debug JSONL file so one viewer file corresponds to one run."""
+    path = Path(path_text)
+    if path.exists() and not path.is_file():
+        raise ValueError(f"{label} log path exists but is not a file: {path}")
+    if path.exists():
+        path.unlink()
+        print(f"  Cleared existing {label} log: {path}")
 
 
 def _apply_dead_cell_counterfactual_logging_to_strategies(
@@ -1669,6 +1682,10 @@ def _apply_dead_cell_counterfactual_logging_to_strategies(
         f"{configured_count} masked MCTS strateg{'y' if configured_count == 1 else 'ies'}."
     )
     print(f"  JSONL path: {args.dead_cell_counterfactual_debug_log_path}")
+    _reset_debug_jsonl_path(
+        args.dead_cell_counterfactual_debug_log_path,
+        label="dead-cell counterfactual debug",
+    )
 
 
 def main():
