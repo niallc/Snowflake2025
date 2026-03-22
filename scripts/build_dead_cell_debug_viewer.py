@@ -134,13 +134,45 @@ def _build_html(records: List[Dict[str, Any]], source_path: Path) -> str:
       gap: 8px;
       font-size: 0.92rem;
     }
-    select, button {
+    select, button, input[type="text"] {
       font: inherit;
       border-radius: 8px;
       border: 1px solid var(--line);
       padding: 8px 10px;
       background: #fff;
       color: var(--fg);
+    }
+    input[type="text"] {
+      width: 100%;
+    }
+    .control-help {
+      margin: 8px 0 0 0;
+      font-size: 0.84rem;
+      color: var(--muted);
+    }
+    .focus-quick-filters {
+      margin-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .focus-chip {
+      min-width: 0;
+      padding: 6px 9px;
+      font-size: 0.83rem;
+      line-height: 1.2;
+      cursor: pointer;
+      background: #fff;
+    }
+    .focus-chip.active {
+      background: color-mix(in srgb, var(--accent) 12%, white);
+      border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .focus-chip-count {
+      color: var(--muted);
+      margin-left: 4px;
     }
     .nav-row {
       display: flex;
@@ -320,6 +352,13 @@ def _build_html(records: List[Dict[str, Any]], source_path: Path) -> str:
       </div>
 
       <div class="control-block">
+        <p class="control-label">Focus Move Exclusions</p>
+        <input id="excludedMovesInput" type="text" placeholder="a1,m13" spellcheck="false" />
+        <p class="control-help">Hide records whose focus move matches any listed coordinate. Use commas or spaces.</p>
+        <div class="focus-quick-filters" id="focusQuickFilters"></div>
+      </div>
+
+      <div class="control-block">
         <p class="control-label">Navigation</p>
         <div class="nav-row">
           <button id="prevBtn" type="button">Prev</button>
@@ -352,6 +391,8 @@ def _build_html(records: List[Dict[str, Any]], source_path: Path) -> str:
     const strategyFilterEl = document.getElementById("strategyFilter");
     const statusFilterEl = document.getElementById("statusFilter");
     const ruleListEl = document.getElementById("ruleList");
+    const excludedMovesInputEl = document.getElementById("excludedMovesInput");
+    const focusQuickFiltersEl = document.getElementById("focusQuickFilters");
     const navStatusEl = document.getElementById("navStatus");
     const contentRootEl = document.getElementById("contentRoot");
     const prevBtn = document.getElementById("prevBtn");
@@ -413,6 +454,34 @@ def _build_html(records: List[Dict[str, Any]], source_path: Path) -> str:
 
     function moveLabel(row, col) {
       return `${colLabelFromIndex(col)}${row + 1}`;
+    }
+
+    function focusMoveLabel(entry) {
+      const focusMove = entry.focus_move || null;
+      return focusMove?.trmph || (
+        Number.isFinite(Number(focusMove?.row)) && Number.isFinite(Number(focusMove?.col))
+          ? moveLabel(Number(focusMove.row), Number(focusMove.col))
+          : null
+      );
+    }
+
+    function normalizeMoveText(text) {
+      const normalized = String(text || "").trim().toLowerCase();
+      if (!normalized) return null;
+      return /^[a-z]+\d+$/.test(normalized) ? normalized : null;
+    }
+
+    function parseExcludedMoves(text) {
+      return new Set(
+        String(text || "")
+          .split(/[\s,]+/)
+          .map(normalizeMoveText)
+          .filter(Boolean)
+      );
+    }
+
+    function excludedMovesTextFromSet(moveSet) {
+      return Array.from(moveSet).sort((left, right) => left.localeCompare(right)).join(",");
     }
 
     function moveKey(move) {
@@ -572,12 +641,7 @@ def _build_html(records: List[Dict[str, Any]], source_path: Path) -> str:
     }
 
     function buildMetaHtml(entry) {
-      const focusMove = entry.focus_move || null;
-      const focusLabel = focusMove?.trmph || (
-        Number.isFinite(Number(focusMove?.row)) && Number.isFinite(Number(focusMove?.col))
-          ? moveLabel(Number(focusMove.row), Number(focusMove.col))
-          : "(unknown)"
-      );
+      const focusLabel = focusMoveLabel(entry) || "(unknown)";
       const rules = normalizeRules(entry).join(", ");
       const replies = (entry.vulnerable_reply_moves || [])
         .map((move) => move?.trmph || moveLabel(Number(move.row), Number(move.col)))
@@ -602,15 +666,39 @@ def _build_html(records: List[Dict[str, Any]], source_path: Path) -> str:
     const allRules = Array.from(new Set(records.flatMap((r) => normalizeRules(r)))).sort();
     const allStrategies = Array.from(new Set(records.map((r) => r.strategy_label || "(unknown)"))).sort();
     const allStatuses = Array.from(new Set(records.map((r) => normalizeStatus(r)))).sort();
+    const focusMoveCounts = new Map();
+    for (const entry of records) {
+      const label = normalizeMoveText(focusMoveLabel(entry));
+      if (!label) continue;
+      focusMoveCounts.set(label, (focusMoveCounts.get(label) || 0) + 1);
+    }
+    const topRepeatedFocusMoves = Array.from(focusMoveCounts.entries())
+      .filter(([, count]) => count > 1)
+      .sort((left, right) => {
+        if (right[1] !== left[1]) return right[1] - left[1];
+        return left[0].localeCompare(right[0]);
+      })
+      .slice(0, 18);
+    const excludedMovesStorageKey = `weak-move-debug-viewer:excluded-focus-moves:${sourcePath}`;
 
     let activeRules = new Set(allRules);
     let activeStrategy = "ALL";
     let activeStatus = "ALL";
+    let excludedFocusMoves = new Set();
     let filteredRecords = [];
     let index = 0;
 
     sourcePathEl.textContent = sourcePath;
-    globalStatsEl.textContent = `Loaded ${records.length} records | Statuses: ${allStatuses.join(", ") || "(none)"} | Rules: ${allRules.join(", ") || "(none)"}`;
+
+    function updateGlobalStats() {
+      const hiddenMoves = Array.from(excludedFocusMoves).sort((left, right) => left.localeCompare(right));
+      const hiddenSummary = hiddenMoves.length ? hiddenMoves.join(", ") : "(none)";
+      globalStatsEl.textContent =
+        `Loaded ${records.length} records | Showing ${filteredRecords.length} | ` +
+        `Statuses: ${allStatuses.join(", ") || "(none)"} | ` +
+        `Rules: ${allRules.join(", ") || "(none)"} | ` +
+        `Hidden focus moves: ${hiddenSummary}`;
+    }
 
     function render() {
       if (!filteredRecords.length) {
@@ -632,10 +720,47 @@ def _build_html(records: List[Dict[str, Any]], source_path: Path) -> str:
         const statusOk = activeStatus === "ALL" || normalizeStatus(entry) === activeStatus;
         const rules = normalizeRules(entry);
         const ruleOk = allRules.length === 0 || rules.some((rule) => activeRules.has(rule));
-        return strategyOk && statusOk && ruleOk;
+        const focusLabel = normalizeMoveText(focusMoveLabel(entry));
+        const focusOk = !focusLabel || !excludedFocusMoves.has(focusLabel);
+        return strategyOk && statusOk && ruleOk && focusOk;
       });
       if (index >= filteredRecords.length) index = 0;
+      updateGlobalStats();
       render();
+    }
+
+    function renderFocusQuickFilters() {
+      if (!topRepeatedFocusMoves.length) {
+        focusQuickFiltersEl.innerHTML = '<p class="empty-state">No repeated focus moves in this log.</p>';
+        return;
+      }
+      focusQuickFiltersEl.innerHTML = topRepeatedFocusMoves.map(([label, count]) => `
+        <button
+          class="focus-chip${excludedFocusMoves.has(label) ? " active" : ""}"
+          type="button"
+          data-move="${escapeHtml(label)}"
+          aria-pressed="${excludedFocusMoves.has(label) ? "true" : "false"}"
+        >${escapeHtml(label)}<span class="focus-chip-count">${count}</span></button>
+      `).join("");
+    }
+
+    function persistExcludedMoves() {
+      try {
+        window.localStorage.setItem(
+          excludedMovesStorageKey,
+          excludedMovesTextFromSet(excludedFocusMoves)
+        );
+      } catch (_error) {
+        // Ignore storage failures in static/offline contexts.
+      }
+    }
+
+    function applyExcludedMovesFromInput() {
+      excludedFocusMoves = parseExcludedMoves(excludedMovesInputEl.value);
+      excludedMovesInputEl.value = excludedMovesTextFromSet(excludedFocusMoves);
+      persistExcludedMoves();
+      renderFocusQuickFilters();
+      recomputeFiltered();
     }
 
     function buildControls() {
@@ -671,6 +796,40 @@ def _build_html(records: List[Dict[str, Any]], source_path: Path) -> str:
           recomputeFiltered();
         });
       }
+
+      try {
+        excludedMovesInputEl.value = window.localStorage.getItem(excludedMovesStorageKey) || "";
+      } catch (_error) {
+        excludedMovesInputEl.value = "";
+      }
+      excludedFocusMoves = parseExcludedMoves(excludedMovesInputEl.value);
+      excludedMovesInputEl.value = excludedMovesTextFromSet(excludedFocusMoves);
+      excludedMovesInputEl.addEventListener("change", applyExcludedMovesFromInput);
+      excludedMovesInputEl.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          applyExcludedMovesFromInput();
+        }
+      });
+
+      focusQuickFiltersEl.addEventListener("click", (event) => {
+        const eventTarget = event.target instanceof Element ? event.target : null;
+        const button = eventTarget ? eventTarget.closest("button[data-move]") : null;
+        if (!button) return;
+        const move = normalizeMoveText(button.dataset.move);
+        if (!move) return;
+
+        const nextMoves = new Set(excludedFocusMoves);
+        if (nextMoves.has(move)) {
+          nextMoves.delete(move);
+        } else {
+          nextMoves.add(move);
+        }
+
+        excludedMovesInputEl.value = excludedMovesTextFromSet(nextMoves);
+        applyExcludedMovesFromInput();
+      });
+      renderFocusQuickFilters();
 
       prevBtn.addEventListener("click", () => {
         if (!filteredRecords.length) return;

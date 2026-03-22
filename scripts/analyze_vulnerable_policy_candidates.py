@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Analyze how often top policy candidates are weak/dead/vulnerable in played games."""
+"""Analyze how often top policy candidates are weak/dead/vulnerable in played games.
+
+This script intentionally stays off the hot path. It replays saved tournament
+states and recomputes policy/value outputs offline so deeper investigations do
+not add instrumentation complexity to the core MCTS execution code.
+"""
 
 from __future__ import annotations
 
@@ -25,7 +30,7 @@ from hex_ai.utils.format_conversion import (
     trmph_move_to_rowcol,
 )
 from hex_ai.utils.weaks_cells import select_policy_ordered_weak_moves
-from hex_ai.value_utils import player_to_winner
+from hex_ai.value_utils import ValuePredictor, player_to_winner
 
 
 RANK_BIN_LABELS: tuple[str, ...] = ("1", "2-3", "4-5", "6-10", "11+")
@@ -39,6 +44,7 @@ class PositionRef:
     game_label: str
     move_index_to_play: int
     state_trmph: str
+    eventual_winner: str
 
 
 def parse_args() -> argparse.Namespace:
@@ -222,6 +228,7 @@ def _collect_focus_positions(
                             game_label=row["game"],
                             move_index_to_play=move_index_to_play,
                             state_trmph=state.to_trmph(),
+                            eventual_winner=row["winner"].strip(),
                         )
                     )
 
@@ -267,6 +274,22 @@ def _move_index_bucket(move_index: int) -> str:
     return f"{start}-{end}"
 
 
+def _win_probability_bucket(win_probability: float) -> str:
+    if win_probability < 0.10:
+        return "<0.10"
+    if win_probability < 0.25:
+        return "0.10-0.25"
+    if win_probability < 0.40:
+        return "0.25-0.40"
+    if win_probability <= 0.60:
+        return "0.40-0.60"
+    if win_probability <= 0.75:
+        return "0.60-0.75"
+    if win_probability <= 0.90:
+        return "0.75-0.90"
+    return ">0.90"
+
+
 def _safe_rate(count: int, total: int) -> float:
     if total <= 0:
         return 0.0
@@ -295,10 +318,33 @@ def _summarize_numeric(values: Sequence[int]) -> dict[str, Any]:
     }
 
 
+def _summarize_probability(values: Sequence[float]) -> dict[str, Any]:
+    if not values:
+        return {
+            "count": 0,
+            "mean": None,
+            "median": None,
+            "min": None,
+            "max": None,
+            "bucket_counts": {},
+        }
+    return {
+        "count": int(len(values)),
+        "mean": float(sum(values) / len(values)),
+        "median": float(statistics.median(values)),
+        "min": float(min(values)),
+        "max": float(max(values)),
+        "bucket_counts": dict(
+            sorted(Counter(_win_probability_bucket(value) for value in values).items())
+        ),
+    }
+
+
 def _sample_payload(
     position: PositionRef,
     state_summary: dict[str, Any],
 ) -> dict[str, Any]:
+    current_player = state_summary["current_player"]
     return {
         "game_row_index": position.game_row_index,
         "opening_idx": position.opening_idx,
@@ -306,6 +352,13 @@ def _sample_payload(
         "game_label": position.game_label,
         "move_index_to_play": position.move_index_to_play,
         "state_trmph": position.state_trmph,
+        "current_player": current_player,
+        "eventual_winner": position.eventual_winner,
+        "eventual_current_player_won": bool(
+            position.eventual_winner == ("b" if current_player == "blue" else "r")
+        ),
+        "root_value_signed": state_summary["root_value_signed"],
+        "current_player_win_probability": state_summary["current_player_win_probability"],
         "top_policy_move": state_summary["top_move"]["trmph"],
         "top_policy_move_status": state_summary["top_move"]["status"],
         "top_policy_move_filtered": bool(state_summary["top_move"]["filtered"]),
@@ -321,22 +374,31 @@ def _sample_payload(
 def _build_state_summary(
     state_trmph: str,
     policy_logits: Sequence[float],
+    value_signed: float,
     *,
     top_ks: Sequence[int],
 ) -> dict[str, Any]:
     state = HexGameState.from_trmph(state_trmph)
     board_size = int(state.board.shape[0])
     legal_moves = state.get_legal_moves()
+    current_player = state.current_player_enum
     legal_indices = [
         rowcol_to_tensor_with_size(row, col, board_size)
         for row, col in legal_moves
     ]
     legal_scores = [float(policy_logits[index]) for index in legal_indices]
+    current_player_win_probability = ValuePredictor.get_win_probability(
+        value_signed,
+        current_player,
+    )
 
     if _has_immediate_terminal_move(state, legal_moves):
         return {
             "terminal_bypass": True,
+            "current_player": str(current_player.name).lower(),
             "legal_move_count": int(len(legal_moves)),
+            "root_value_signed": float(value_signed),
+            "current_player_win_probability": float(current_player_win_probability),
         }
 
     order = sorted(
@@ -348,7 +410,7 @@ def _build_state_summary(
         for rank, idx in enumerate(order, start=1)
     }
     player_piece = (
-        Piece.BLUE.value if state.current_player_enum == Player.BLUE else Piece.RED.value
+        Piece.BLUE.value if current_player == Player.BLUE else Piece.RED.value
     )
     filter_result = select_policy_ordered_weak_moves(
         state.board,
@@ -389,6 +451,9 @@ def _build_state_summary(
 
     return {
         "terminal_bypass": False,
+        "current_player": str(current_player.name).lower(),
+        "root_value_signed": float(value_signed),
+        "current_player_win_probability": float(current_player_win_probability),
         "legal_move_count": int(len(legal_moves)),
         "safe_moves_total": int(len(filter_result.safe_indices)),
         "vulnerable_moves_total": int(len(filter_result.vulnerable_indices)),
@@ -413,6 +478,19 @@ def _build_state_summary(
 
 def _render_pct(count: int, total: int) -> str:
     return f"{count}/{total} ({_safe_rate(count, total) * 100:.2f}%)"
+
+
+def _winner_matches_current_player(
+    eventual_winner: str,
+    current_player: str,
+) -> bool:
+    if eventual_winner not in {"b", "r"}:
+        raise ValueError(f"Unexpected winner token: {eventual_winner!r}")
+    if current_player == "blue":
+        return eventual_winner == "b"
+    if current_player == "red":
+        return eventual_winner == "r"
+    raise ValueError(f"Unexpected current player label: {current_player!r}")
 
 
 def _print_summary(summary: dict[str, Any]) -> None:
@@ -489,6 +567,23 @@ def _print_summary(summary: dict[str, Any]) -> None:
         "  first occurrence per game: "
         f"{summary['per_k'][str(largest_k)]['first_filtered_move_index_summary']}"
     )
+    print()
+    print("Root value / eventual result for top-1 filtered positions:")
+    print(
+        "  current-player win probability: "
+        f"{summary['top1_filtered_context']['current_player_win_probability_summary']}"
+    )
+    print(
+        "  eventual current-player wins: "
+        + _render_pct(
+            summary["top1_filtered_context"]["eventual_current_player_wins"],
+            summary["top1_filtered_context"]["positions"],
+        )
+    )
+    print(
+        "  value bands: "
+        f"{summary['top1_filtered_context']['current_player_win_probability_summary']['bucket_counts']}"
+    )
 
 
 def main() -> None:
@@ -506,13 +601,18 @@ def main() -> None:
     unique_states = sorted({position.state_trmph for position in positions})
     model_path = _resolve_model_path(args.model)
     infer = SimpleModelInference(model_path, verbose=0)
-    policy_logits_list, _ = infer.batch_infer(unique_states)
+    policy_logits_list, value_signed_list = infer.batch_infer(unique_states)
 
     state_summary_by_trmph: dict[str, dict[str, Any]] = {}
-    for state_trmph, policy_logits in zip(unique_states, policy_logits_list):
+    for state_trmph, policy_logits, value_signed in zip(
+        unique_states,
+        policy_logits_list,
+        value_signed_list,
+    ):
         state_summary_by_trmph[state_trmph] = _build_state_summary(
             state_trmph,
             policy_logits,
+            value_signed,
             top_ks=top_ks,
         )
 
@@ -546,6 +646,11 @@ def main() -> None:
     sample_top1_filtered: list[dict[str, Any]] = []
     sample_largest_k_filtered: list[dict[str, Any]] = []
     largest_k = max(top_ks)
+    applicable_current_player_win_probabilities: list[float] = []
+    top1_filtered_current_player_win_probabilities: list[float] = []
+    applicable_current_player_wins = 0
+    top1_filtered_eventual_current_player_wins = 0
+    top1_filtered_results_by_bucket: dict[str, dict[str, int]] = {}
 
     for position in positions:
         state_summary = state_summary_by_trmph[position.state_trmph]
@@ -554,6 +659,14 @@ def main() -> None:
             continue
 
         counts["weak_filter_applicable_positions"] += 1
+        current_player_win_probability = state_summary["current_player_win_probability"]
+        applicable_current_player_win_probabilities.append(current_player_win_probability)
+        current_player_eventually_won = _winner_matches_current_player(
+            position.eventual_winner,
+            state_summary["current_player"],
+        )
+        if current_player_eventually_won:
+            applicable_current_player_wins += 1
         if state_summary["only_vulnerable_remaining"]:
             counts["positions_with_only_vulnerable_remaining"] += 1
 
@@ -566,6 +679,19 @@ def main() -> None:
             counts["top_move_classified_weak"] += 1
         if top_move["filtered"]:
             counts["top_move_filtered"] += 1
+            top1_filtered_current_player_win_probabilities.append(
+                current_player_win_probability
+            )
+            if current_player_eventually_won:
+                top1_filtered_eventual_current_player_wins += 1
+            bucket = _win_probability_bucket(current_player_win_probability)
+            bucket_counts = top1_filtered_results_by_bucket.setdefault(
+                bucket,
+                {"positions": 0, "eventual_current_player_wins": 0},
+            )
+            bucket_counts["positions"] += 1
+            if current_player_eventually_won:
+                bucket_counts["eventual_current_player_wins"] += 1
             if len(sample_top1_filtered) < args.sample_limit:
                 sample_top1_filtered.append(_sample_payload(position, state_summary))
         if top_move["status"] == "vulnerable" and not top_move["filtered"]:
@@ -619,6 +745,41 @@ def main() -> None:
                 counts["top_move_filtered"],
                 applicable,
             ),
+        },
+        "applicable_position_context": {
+            "positions": int(applicable),
+            "current_player_win_probability_summary": _summarize_probability(
+                applicable_current_player_win_probabilities
+            ),
+            "eventual_current_player_wins": int(applicable_current_player_wins),
+            "eventual_current_player_win_rate": _safe_rate(
+                applicable_current_player_wins,
+                applicable,
+            ),
+        },
+        "top1_filtered_context": {
+            "positions": int(counts["top_move_filtered"]),
+            "current_player_win_probability_summary": _summarize_probability(
+                top1_filtered_current_player_win_probabilities
+            ),
+            "eventual_current_player_wins": int(top1_filtered_eventual_current_player_wins),
+            "eventual_current_player_win_rate": _safe_rate(
+                top1_filtered_eventual_current_player_wins,
+                counts["top_move_filtered"],
+            ),
+            "eventual_result_by_value_band": {
+                bucket: {
+                    "positions": int(bucket_counts["positions"]),
+                    "eventual_current_player_wins": int(
+                        bucket_counts["eventual_current_player_wins"]
+                    ),
+                    "eventual_current_player_win_rate": _safe_rate(
+                        bucket_counts["eventual_current_player_wins"],
+                        bucket_counts["positions"],
+                    ),
+                }
+                for bucket, bucket_counts in sorted(top1_filtered_results_by_bucket.items())
+            },
         },
         "rank_bins": {
             key: {
