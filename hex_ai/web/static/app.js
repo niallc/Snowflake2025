@@ -113,7 +113,7 @@ const COLORS = {
   get RED_WINNING_PIECE() { return getColors().VERY_DARK_RED; },
 };
 
-const DEFAULT_INTERACTIVE_MCTS_NUM_SIMULATIONS = 600;
+const DEFAULT_INTERACTIVE_MCTS_NUM_SIMULATIONS = 90;
 
 // --- State ---
 let state = {

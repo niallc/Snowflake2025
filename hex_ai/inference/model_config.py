@@ -281,7 +281,7 @@ MODEL_GENERATIONS: Dict[int, Dict[str, Any]] = {
     },
     64: {
         "dir": "Mar18_FreshRetrain_13Blocks/pipeline_20260318_210343/",
-        "models": ["epoch1_mini134.pt.gz"]
+        "models": ["epoch2_mini1.pt.gz"]
     },
 }
 
