@@ -6,6 +6,7 @@ dead-cell motifs suitable for hard masking in MCTS.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Dict, List, Sequence, Set, Tuple
 
 import numpy as np
@@ -37,6 +38,42 @@ _RULE_D2 = "D2"
 _RULE_D3 = "D3"
 _RULE_A1B2A3 = "A1B2A3"
 _RULE_PAIR_TRIPLE = "pair_triple"
+
+# TODO: once the new vulnerable-cell rollout is stable, remove the legacy
+# A1B2A3/pair-triple/full-board-mask path and keep only the active per-move
+# weak-move classifier used by MCTS.
+_RULE_V1 = "V1"
+_RULE_V2 = "V2"
+_RULE_V3 = "V3"
+
+_WEAK_MOVE_STATUS_SAFE = "safe"
+_WEAK_MOVE_STATUS_DEAD = "dead"
+_WEAK_MOVE_STATUS_VULNERABLE = "vulnerable"
+
+
+@dataclass(frozen=True)
+class _RingEntry:
+    row: int
+    col: int
+    token: str
+
+
+@dataclass(frozen=True)
+class WeakMoveClassification:
+    status: str
+    reasons: Tuple[str, ...]
+    vulnerable_reply_moves: Tuple[Tuple[int, int], ...] = ()
+
+
+@dataclass(frozen=True)
+class PolicyOrderedMoveFilterResult:
+    keep_indices: Tuple[int, ...]
+    safe_indices: Tuple[int, ...]
+    vulnerable_indices: Tuple[int, ...]
+    dead_indices: Tuple[int, ...]
+    weak_filtered_indices: Tuple[int, ...]
+    only_vulnerable_remaining: bool
+    classifications_by_index: Dict[int, WeakMoveClassification]
 
 
 def _normalize_board(board: BoardLike) -> np.ndarray:
@@ -71,6 +108,164 @@ def _ring_tokens(board: np.ndarray, r: int, c: int) -> List[str]:
         else:
             ring.append(_OFFBOARD)
     return ring
+
+
+def _ring_entries(board: np.ndarray, r: int, c: int) -> List[_RingEntry]:
+    """Return 6 ring entries around (r,c), preserving off-board coordinates."""
+    n = int(board.shape[0])
+    ring: List[_RingEntry] = []
+    for dr, dc in _RING_OFFSETS:
+        nr, nc = r + dr, c + dc
+        if _in_bounds(n, nr, nc):
+            token = str(board[nr, nc])
+        else:
+            token = _OFFBOARD
+        ring.append(_RingEntry(row=nr, col=nc, token=token))
+    return ring
+
+
+def _normalize_player_color_token(player_color: str | Piece) -> str:
+    """Normalize a player color into the board token used in the detectors."""
+    if isinstance(player_color, Piece):
+        token = player_color.value
+    else:
+        token = str(player_color).strip().lower()
+
+    if token not in (_RED, _BLUE):
+        raise ValueError(f"player_color must be one of {{'r', 'b'}}, got {player_color!r}")
+    return token
+
+
+def _edge_entry_matches_color(entry: _RingEntry, color: str, board_size: int) -> bool:
+    """Return whether one ring entry satisfies a colored pattern slot."""
+    if entry.token == color:
+        return True
+    if entry.token != _OFFBOARD:
+        return False
+    if color == _RED and (entry.col < 0 or entry.col >= board_size):
+        return True
+    if color == _BLUE and (entry.row < 0 or entry.row >= board_size):
+        return True
+    return False
+
+
+def _max_samecolor_run_cyclic_entries(
+    ring: Sequence[_RingEntry],
+    *,
+    color: str,
+    board_size: int,
+) -> int:
+    """Longest cyclic run (0-6) of one concrete color with edge-aware matching."""
+    doubled = list(ring) + list(ring)
+    best = cur = 0
+    for entry in doubled:
+        if _edge_entry_matches_color(entry, color, board_size):
+            cur += 1
+            if cur > best:
+                best = cur
+        else:
+            cur = 0
+    return min(best, 6)
+
+
+def _has_two_two_split_with_single_gaps_entries(
+    ring: Sequence[_RingEntry],
+    *,
+    color: str,
+    board_size: int,
+) -> bool:
+    """Detect cyclic `*AA*BB` with edge-aware color matching."""
+    opp = _opp(color)
+    for i in range(6):
+        if (
+            _edge_entry_matches_color(ring[(i + 1) % 6], color, board_size)
+            and _edge_entry_matches_color(ring[(i + 2) % 6], color, board_size)
+            and _edge_entry_matches_color(ring[(i + 4) % 6], opp, board_size)
+            and _edge_entry_matches_color(ring[(i + 5) % 6], opp, board_size)
+        ):
+            return True
+    return False
+
+
+def _has_three_plus_one_opposite_entries(
+    ring: Sequence[_RingEntry],
+    *,
+    color: str,
+    board_size: int,
+) -> bool:
+    """Detect canonical `AAA*B*` with edge-aware color matching."""
+    opp = _opp(color)
+    for i in range(6):
+        if not all(
+            _edge_entry_matches_color(ring[(i + offset) % 6], color, board_size)
+            for offset in (0, 1, 2)
+        ):
+            continue
+        if _edge_entry_matches_color(ring[(i + 4) % 6], opp, board_size):
+            return True
+    return False
+
+
+def _dead_rule_reasons_for_edge_aware_ring(
+    ring: Sequence[_RingEntry],
+    *,
+    board_size: int,
+    enable_four_run: bool,
+    enable_two_two_split: bool,
+    enable_three_plus_one: bool,
+) -> Set[str]:
+    """Return canonical D1/D2/D3 reasons for one edge-aware ring."""
+    reasons: Set[str] = set()
+
+    if enable_four_run:
+        if (
+            _max_samecolor_run_cyclic_entries(ring, color=_RED, board_size=board_size) >= 4
+            or _max_samecolor_run_cyclic_entries(ring, color=_BLUE, board_size=board_size) >= 4
+        ):
+            reasons.add(_RULE_D1)
+
+    if enable_two_two_split:
+        if (
+            _has_two_two_split_with_single_gaps_entries(
+                ring,
+                color=_RED,
+                board_size=board_size,
+            )
+            or _has_two_two_split_with_single_gaps_entries(
+                ring,
+                color=_BLUE,
+                board_size=board_size,
+            )
+        ):
+            reasons.add(_RULE_D2)
+
+    if enable_three_plus_one:
+        if (
+            _has_three_plus_one_opposite_entries(
+                ring,
+                color=_RED,
+                board_size=board_size,
+            )
+            or _has_three_plus_one_opposite_entries(
+                ring,
+                color=_BLUE,
+                board_size=board_size,
+            )
+        ):
+            reasons.add(_RULE_D3)
+
+    return reasons
+
+
+def _vulnerable_rule_for_dead_rule(dead_rule: str) -> str:
+    """Map a dead-rule reason to its vulnerable one-ply analogue."""
+    if dead_rule == _RULE_D1:
+        return _RULE_V1
+    if dead_rule == _RULE_D2:
+        return _RULE_V2
+    if dead_rule == _RULE_D3:
+        return _RULE_V3
+    raise ValueError(f"Unsupported dead rule for vulnerable mapping: {dead_rule}")
 
 
 def _normalize_a1b2a3_mask_for_player(
@@ -523,3 +718,154 @@ def find_dead_cells_with_reasons(
             dead_with_reasons.setdefault(b, set()).add(_RULE_PAIR_TRIPLE)
 
     return dead_with_reasons
+
+
+def classify_weak_move(
+    board: BoardLike,
+    r: int,
+    c: int,
+    *,
+    player_color: str | Piece,
+    enable_four_run: bool = True,
+    enable_two_two_split: bool = True,
+    enable_three_plus_one: bool = True,
+) -> WeakMoveClassification:
+    """
+    Classify one empty candidate move as safe, dead, or vulnerable.
+
+    This is the new edge-aware, per-move classifier intended for policy-ordered
+    candidate filtering. It intentionally ignores legacy A1B2A3 and pair-triple
+    motifs, which remain available only in the older full-board helpers.
+    """
+    board_np = _normalize_board(board)
+    n = int(board_np.shape[0])
+    if not _in_bounds(n, r, c):
+        raise ValueError(f"Cell ({r}, {c}) is out of bounds for board size {n}")
+    if str(board_np[r, c]) != _EMPTY:
+        raise ValueError(f"Cell ({r}, {c}) is not empty and cannot be classified as a move")
+
+    player_token = _normalize_player_color_token(player_color)
+    opponent_token = _opp(player_token)
+    ring = _ring_entries(board_np, r, c)
+
+    dead_reasons = _dead_rule_reasons_for_edge_aware_ring(
+        ring,
+        board_size=n,
+        enable_four_run=enable_four_run,
+        enable_two_two_split=enable_two_two_split,
+        enable_three_plus_one=enable_three_plus_one,
+    )
+    if dead_reasons:
+        return WeakMoveClassification(
+            status=_WEAK_MOVE_STATUS_DEAD,
+            reasons=tuple(sorted(dead_reasons)),
+        )
+
+    vulnerable_reasons: Set[str] = set()
+    vulnerable_reply_moves: List[Tuple[int, int]] = []
+    for idx, entry in enumerate(ring):
+        if entry.token != _EMPTY:
+            continue
+
+        hypothetical_ring = list(ring)
+        hypothetical_ring[idx] = _RingEntry(entry.row, entry.col, opponent_token)
+        completed_dead_reasons = _dead_rule_reasons_for_edge_aware_ring(
+            hypothetical_ring,
+            board_size=n,
+            enable_four_run=enable_four_run,
+            enable_two_two_split=enable_two_two_split,
+            enable_three_plus_one=enable_three_plus_one,
+        )
+        if not completed_dead_reasons:
+            continue
+
+        vulnerable_reply_moves.append((entry.row, entry.col))
+        for dead_rule in completed_dead_reasons:
+            vulnerable_reasons.add(_vulnerable_rule_for_dead_rule(dead_rule))
+
+    if vulnerable_reasons:
+        unique_reply_moves = tuple(dict.fromkeys(vulnerable_reply_moves))
+        return WeakMoveClassification(
+            status=_WEAK_MOVE_STATUS_VULNERABLE,
+            reasons=tuple(sorted(vulnerable_reasons)),
+            vulnerable_reply_moves=unique_reply_moves,
+        )
+
+    return WeakMoveClassification(
+        status=_WEAK_MOVE_STATUS_SAFE,
+        reasons=tuple(),
+    )
+
+
+def select_policy_ordered_weak_moves(
+    board: BoardLike,
+    legal_moves: Sequence[Tuple[int, int]],
+    legal_policy_scores: Sequence[float],
+    *,
+    player_color: str | Piece,
+    enable_four_run: bool = True,
+    enable_two_two_split: bool = True,
+    enable_three_plus_one: bool = True,
+) -> PolicyOrderedMoveFilterResult:
+    """
+    Select candidate moves in descending policy order using dead/vulnerable filtering.
+
+    This function does not impose its own move-count budget. It classifies the
+    move set the caller already intends to consider, preserving all safe moves.
+    Vulnerable moves are kept only if there are no safe moves at all. Dead moves
+    are never kept.
+    """
+    board_np = _normalize_board(board)
+    if len(legal_moves) != len(legal_policy_scores):
+        raise ValueError(
+            "legal_moves and legal_policy_scores must have the same length, got "
+            f"{len(legal_moves)} vs {len(legal_policy_scores)}"
+        )
+
+    order = sorted(
+        range(len(legal_moves)),
+        key=lambda idx: float(legal_policy_scores[idx]),
+        reverse=True,
+    )
+
+    classifications_by_index: Dict[int, WeakMoveClassification] = {}
+    safe_indices: List[int] = []
+    vulnerable_indices: List[int] = []
+    dead_indices: List[int] = []
+
+    for idx in order:
+        row, col = legal_moves[idx]
+        classification = classify_weak_move(
+            board_np,
+            row,
+            col,
+            player_color=player_color,
+            enable_four_run=enable_four_run,
+            enable_two_two_split=enable_two_two_split,
+            enable_three_plus_one=enable_three_plus_one,
+        )
+        classifications_by_index[idx] = classification
+
+        if classification.status == _WEAK_MOVE_STATUS_DEAD:
+            dead_indices.append(idx)
+            continue
+        if classification.status == _WEAK_MOVE_STATUS_VULNERABLE:
+            vulnerable_indices.append(idx)
+            continue
+        safe_indices.append(idx)
+
+    keep_indices = list(safe_indices) if safe_indices else list(vulnerable_indices)
+
+    weak_filtered_indices = list(dead_indices)
+    if safe_indices:
+        weak_filtered_indices.extend(vulnerable_indices)
+
+    return PolicyOrderedMoveFilterResult(
+        keep_indices=tuple(keep_indices),
+        safe_indices=tuple(safe_indices),
+        vulnerable_indices=tuple(vulnerable_indices),
+        dead_indices=tuple(dead_indices),
+        weak_filtered_indices=tuple(weak_filtered_indices),
+        only_vulnerable_remaining=(len(safe_indices) == 0 and len(keep_indices) > 0),
+        classifications_by_index=classifications_by_index,
+    )

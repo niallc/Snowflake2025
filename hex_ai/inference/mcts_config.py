@@ -120,6 +120,8 @@ class BaselineMCTSConfig:
     dead_cell_enable_four_run: bool = True
     dead_cell_enable_two_two_split: bool = True
     dead_cell_enable_three_plus_one: bool = True
+    # TODO: remove this legacy A1B2A3 toggle after the weak-move rollout is
+    # fully validated. The active per-move classifier no longer uses it.
     dead_cell_enable_a1b2a3_discouraged: bool = True
     dead_cell_enable_double_dead_pairs: bool = False
     dead_cell_debug_log_path: Optional[str] = None

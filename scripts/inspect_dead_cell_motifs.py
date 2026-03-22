@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import numpy as np
 from typing import Dict, Iterable, List, Sequence, Tuple
 
 from hex_ai.inference.game_engine import HexGameState
@@ -42,6 +43,40 @@ def _parse_pair(pair_arg: str, board_size: int) -> Tuple[Tuple[int, int], Tuple[
     a = trmph_move_to_rowcol(parts[0], board_size=board_size)
     b = trmph_move_to_rowcol(parts[1], board_size=board_size)
     return a, b
+
+
+def _parse_player_token(player_arg: str) -> tuple[str, str]:
+    token = str(player_arg).strip().lower()
+    if token in {"red", "r"}:
+        return ws._RED, "red"
+    if token in {"blue", "b"}:
+        return ws._BLUE, "blue"
+    raise ValueError("--player must be one of red, blue, r, b")
+
+
+def _build_board_from_placements(
+    board_size: int,
+    placements_arg: str | None,
+) -> np.ndarray:
+    board = np.full((board_size, board_size), ws._EMPTY, dtype="<U1")
+    if not placements_arg:
+        return board
+
+    entries = [entry.strip() for entry in placements_arg.split(",") if entry.strip()]
+    for entry in entries:
+        if ":" not in entry:
+            raise ValueError(
+                "--placements entries must look like 'd4:r' or 'e5:b'"
+            )
+        coord_text, token_text = [part.strip() for part in entry.split(":", 1)]
+        row, col = trmph_move_to_rowcol(coord_text, board_size=board_size)
+        token = token_text.lower()
+        if token not in {ws._RED, ws._BLUE, ws._EMPTY}:
+            raise ValueError(
+                f"Unsupported placement token {token_text!r}; use r, b, or e"
+            )
+        board[row, col] = token
+    return board
 
 
 def _find_dir_idx(a: Tuple[int, int], b: Tuple[int, int]) -> int | None:
@@ -87,7 +122,14 @@ def _coord_in_dead(board, coord: Tuple[int, int], kwargs: Dict[str, bool]) -> bo
     return coord in dead
 
 
-def _print_cell_details(board, board_size: int, cell: Tuple[int, int]) -> None:
+def _print_cell_details(
+    board,
+    board_size: int,
+    cell: Tuple[int, int],
+    *,
+    player_token: str,
+    player_label: str,
+) -> None:
     r, c = cell
     print("")
     print(f"Cell: {rowcol_to_trmph(r, c, board_size)} at ({r},{c}) token={board[r, c]}")
@@ -107,6 +149,23 @@ def _print_cell_details(board, board_size: int, cell: Tuple[int, int]) -> None:
     print("Rule matches:")
     for name, kwargs in rules.items():
         print(f"  {name:>12s}: {_coord_in_dead(board, cell, kwargs)}")
+
+    if str(board[r, c]) == ws._EMPTY:
+        classification = ws.classify_weak_move(
+            board,
+            r,
+            c,
+            player_color=player_token,
+        )
+        print("Weak-move classification:")
+        print(f"  player_to_move: {player_label}")
+        print(f"  status: {classification.status}")
+        print(f"  reasons: {list(classification.reasons)}")
+        reply_labels = [
+            rowcol_to_trmph(reply_r, reply_c, board_size)
+            for reply_r, reply_c in classification.vulnerable_reply_moves
+        ]
+        print(f"  vulnerable_reply_moves: {reply_labels}")
 
 
 def _print_pair_details(board, board_size: int, pair: Tuple[Tuple[int, int], Tuple[int, int]]) -> None:
@@ -162,11 +221,31 @@ def _print_pair_details(board, board_size: int, pair: Tuple[Tuple[int, int], Tup
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Inspect dead-cell motif matches for one position.")
-    parser.add_argument(
+    source_group = parser.add_mutually_exclusive_group(required=True)
+    source_group.add_argument(
         "--trmph",
         type=str,
-        required=True,
         help="TRMPH state string, e.g. '#13,c3e3c4e4'",
+    )
+    source_group.add_argument(
+        "--board-size",
+        type=int,
+        help="Synthetic board size for direct placement inspection.",
+    )
+    parser.add_argument(
+        "--placements",
+        type=str,
+        help="Comma-separated synthetic placements like 'c4:r,d4:b,e3:r'.",
+    )
+    parser.add_argument(
+        "--player",
+        type=str,
+        default=None,
+        help=(
+            "Optional player override for weak-move classification: red or blue. "
+            "In TRMPH mode, defaults to the actual side to move when omitted. "
+            "In synthetic mode, defaults to red when omitted."
+        ),
     )
     parser.add_argument(
         "--cell",
@@ -183,16 +262,37 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    state = HexGameState.from_trmph(args.trmph)
-    board = ws._normalize_board(state.board)
-    board_size = int(board.shape[0])
+    if args.trmph:
+        state = HexGameState.from_trmph(args.trmph)
+        board = ws._normalize_board(state.board)
+        board_size = int(board.shape[0])
+        if args.player is None:
+            player_token = ws._BLUE if state.current_player_enum.name == "BLUE" else ws._RED
+            player_label = str(state.current_player_enum.name).lower()
+        else:
+            player_token, player_label = _parse_player_token(args.player)
+    else:
+        if args.board_size is None or args.board_size <= 0:
+            raise ValueError("--board-size must be positive in synthetic mode")
+        board_size = int(args.board_size)
+        board = _build_board_from_placements(board_size, args.placements)
+        if args.player is None:
+            player_token, player_label = ws._RED, "red"
+        else:
+            player_token, player_label = _parse_player_token(args.player)
 
     print("Board:")
     _print_board_matrix(board, board_size)
 
     if args.cell:
         cell = trmph_move_to_rowcol(args.cell, board_size=board_size)
-        _print_cell_details(board, board_size, cell)
+        _print_cell_details(
+            board,
+            board_size,
+            cell,
+            player_token=player_token,
+            player_label=player_label,
+        )
 
     if args.pair:
         pair = _parse_pair(args.pair, board_size)

@@ -77,7 +77,12 @@ from hex_ai.utils.temperature import calculate_mcts_root_temperature
 from hex_ai.utils.state_utils import board_key, validate_move_coordinates
 from hex_ai.utils.legal_action_contracts import assert_actions_subset_of_legal
 from hex_ai.utils.timing import MCTSTimingTracker
-from hex_ai.utils.weaks_cells import find_dead_cells, find_dead_cells_with_reasons
+from hex_ai.utils.weaks_cells import (
+    PolicyOrderedMoveFilterResult,
+    find_dead_cells,
+    find_dead_cells_with_reasons,
+    select_policy_ordered_weak_moves,
+)
 from hex_ai.inference.mcts_config import BaselineMCTSConfig, create_mcts_config
 from hex_ai.inference.mcts_gumbel import MCTSGumbelMixin
 from hex_ai.inference.mcts_support import (
@@ -302,6 +307,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         self._dead_cell_pruned_nodes_total = 0
         self._dead_cell_debug_records_written = 0
         self._dead_cell_counterfactual_matches_total = 0
+        self._root_only_vulnerable_fallback = False
 
         # Terminal move detection
         self.terminal_detector = TerminalMoveDetector(
@@ -528,6 +534,11 @@ class BaselineMCTS(MCTSGumbelMixin):
             self._maybe_log_dead_cell_counterfactual_choice(root_state, maybe_terminated, verbose)
             return maybe_terminated
 
+        vulnerable_fallback = self._build_root_vulnerable_fallback_result_if_needed(root)
+        if vulnerable_fallback is not None:
+            self._maybe_log_dead_cell_counterfactual_choice(root_state, vulnerable_fallback, verbose)
+            return vulnerable_fallback
+
         timing_stats = self._run_simulation_loop(root, verbose)
         self._annotate_search_timing_stats(timing_stats)
         result = self._build_completed_search_result(root, root_state, timing_stats, verbose)
@@ -591,7 +602,6 @@ class BaselineMCTS(MCTSGumbelMixin):
         """Prepare and initialize the root node for MCTS search."""
         board_size = board_size_from_state(root_state)
         root = MCTSNode(root_state, board_size)
-        self._apply_dead_cell_pruning(root)
         
         # Expand root if not terminal
         if expand_root and not root.is_terminal and not root.is_expanded:
@@ -666,6 +676,48 @@ class BaselineMCTS(MCTSGumbelMixin):
             root_node=root,
             algorithm_termination_info=termination_info,
             win_probability=win_probability
+        )
+
+    def _build_root_vulnerable_fallback_result_if_needed(
+        self,
+        root: MCTSNode,
+    ) -> Optional[MCTSResult]:
+        """Return a root-only random vulnerable fallback result when configured state requires it."""
+        if not self._root_only_vulnerable_fallback:
+            return None
+        if not root.legal_moves:
+            return None
+
+        # TODO: consider resignation instead of random vulnerable fallback once we
+        # are satisfied that "all remaining moves are vulnerable" cannot hide a
+        # forced win for the current player.
+        move = random.choice(root.legal_moves)
+        tree_data = self.get_tree_data(root)
+        stats = self._get_stats_builder().create_base_stats()
+        stats.update(
+            {
+                "total_simulations": 0,
+                "simulations_per_second": 0.0,
+                "algorithm_termination_occurred": True,
+                "algorithm_termination_reason": "vulnerable_random_fallback",
+                "unique_evals_total": int(self._unique_evals_total),
+                "effective_sims_total": int(self._effective_sims_total),
+                "unique_evals_per_sec": 0.0,
+                "effective_sims_per_sec": 0.0,
+                "dead_cell_pruning_enabled": bool(self.cfg.enable_dead_cell_pruning),
+                "dead_cell_pruned_moves": int(self._dead_cell_pruned_moves_total),
+                "dead_cell_pruned_nodes": int(self._dead_cell_pruned_nodes_total),
+                "dead_cell_counterfactual_matches": int(self._dead_cell_counterfactual_matches_total),
+                "selected_move_source": "vulnerable_random_fallback",
+            }
+        )
+        return MCTSResult(
+            move=move,
+            stats=stats,
+            tree_data=tree_data,
+            root_node=root,
+            algorithm_termination_info=None,
+            win_probability=0.5,
         )
 
     def _run_simulation_loop(self, root: MCTSNode, verbose: int) -> Dict[str, Any]:
@@ -754,6 +806,7 @@ class BaselineMCTS(MCTSGumbelMixin):
         self._dead_cell_pruned_nodes_total = 0
         self._dead_cell_debug_records_written = 0
         self._dead_cell_counterfactual_matches_total = 0
+        self._root_only_vulnerable_fallback = False
         self._gumbel_timing_breakdown = {}
         self._enable_detailed_exploration_if_needed(self.cfg.sims)
 
@@ -1048,7 +1101,6 @@ class BaselineMCTS(MCTSGumbelMixin):
         timing_tracker.end_timing("make_move")
         child = MCTSNode(child_state, board_size)
         child.depth = node.depth + 1
-        self._apply_dead_cell_pruning(child)
         timing_tracker.end_timing("state_creation")
         node.children[loc_idx] = child
 
@@ -1059,6 +1111,9 @@ class BaselineMCTS(MCTSGumbelMixin):
 
     def _apply_dead_cell_pruning(self, node: MCTSNode) -> None:
         """Apply configured dead-cell hard masks to an unexpanded node."""
+        # TODO: remove this legacy whole-board dead-cell pruning path once the
+        # new per-move weak-move filtering rollout is settled. It is retained
+        # only as reference/debugging code for now.
         if not self.cfg.enable_dead_cell_pruning:
             return
         if node.is_terminal:
@@ -1240,6 +1295,32 @@ class BaselineMCTS(MCTSGumbelMixin):
         counterfactual_mcts.eval_cache = OrderedDict(self.eval_cache)
         return counterfactual_mcts.run(root_state, verbose=verbose)
 
+    def _get_root_weak_move_filter_result(
+        self,
+        root_state: HexGameState,
+    ) -> Optional[PolicyOrderedMoveFilterResult]:
+        """Recompute root weak-move filtering for debug/counterfactual logging."""
+        if not self.cfg.enable_dead_cell_pruning:
+            return None
+
+        legal_moves = root_state.get_legal_moves()
+        if not legal_moves:
+            return None
+
+        board_size = board_size_from_state(root_state)
+        legal_indices = [move_to_index(r, c, board_size) for (r, c) in legal_moves]
+        policy_logits_full, _ = self._get_policy_logits_and_legal_mask(root_state, legal_indices)
+        legal_logits = policy_logits_full[legal_indices]
+        return select_policy_ordered_weak_moves(
+            root_state.board,
+            legal_moves,
+            legal_logits,
+            player_color=self._player_to_piece_token(root_state.current_player_enum),
+            enable_four_run=self.cfg.dead_cell_enable_four_run,
+            enable_two_two_split=self.cfg.dead_cell_enable_two_two_split,
+            enable_three_plus_one=self.cfg.dead_cell_enable_three_plus_one,
+        )
+
     def _maybe_log_dead_cell_counterfactual_choice(
         self,
         root_state: HexGameState,
@@ -1258,20 +1339,8 @@ class BaselineMCTS(MCTSGumbelMixin):
         if not self.cfg.enable_dead_cell_pruning:
             return
 
-        dead_cell_reasons = find_dead_cells_with_reasons(
-            root_state.board,
-            enable_four_run=self.cfg.dead_cell_enable_four_run,
-            enable_two_two_split=self.cfg.dead_cell_enable_two_two_split,
-            enable_three_plus_one=self.cfg.dead_cell_enable_three_plus_one,
-            enable_a1b2a3_discouraged=self.cfg.dead_cell_enable_a1b2a3_discouraged,
-            enable_double_dead_pairs=self.cfg.dead_cell_enable_double_dead_pairs,
-            a1b2a3_mask_for_player=(
-                Piece.BLUE.value
-                if root_state.current_player_enum == Player.BLUE
-                else Piece.RED.value
-            ),
-        )
-        if not dead_cell_reasons:
+        filter_result = self._get_root_weak_move_filter_result(root_state)
+        if filter_result is None or not filter_result.weak_filtered_indices:
             return
 
         rng_state = self._capture_rng_state()
@@ -1284,7 +1353,19 @@ class BaselineMCTS(MCTSGumbelMixin):
             self._restore_rng_state(rng_state)
 
         counterfactual_move = counterfactual_result.move
-        rules = sorted(dead_cell_reasons.get(counterfactual_move, set()))
+        legal_moves = root_state.get_legal_moves()
+        try:
+            move_idx = legal_moves.index(counterfactual_move)
+        except ValueError:
+            return
+        if move_idx in set(filter_result.keep_indices):
+            return
+
+        classification = filter_result.classifications_by_index.get(move_idx)
+        if classification is None:
+            return
+
+        rules = list(classification.reasons)
         if not rules:
             return
 
@@ -1301,8 +1382,9 @@ class BaselineMCTS(MCTSGumbelMixin):
             "counterfactual_unmasked_move": self._move_to_debug_payload(
                 counterfactual_move, board_size
             ),
+            "counterfactual_move_status": classification.status,
             "counterfactual_move_rules": rules,
-            "dead_cells_detected_total": int(len(dead_cell_reasons)),
+            "filtered_weak_moves_total": int(len(filter_result.weak_filtered_indices)),
             "masked_root_win_probability": float(masked_result.win_probability),
             "counterfactual_root_win_probability": float(counterfactual_result.win_probability),
             "masked_abs_distance_from_0p5": float(abs(masked_result.win_probability - 0.5)),
@@ -2050,6 +2132,105 @@ class BaselineMCTS(MCTSGumbelMixin):
         noise = np.random.dirichlet([self.cfg.dirichlet_alpha] * L)
         root.P = (1 - self.cfg.dirichlet_eps) * root.P + self.cfg.dirichlet_eps * noise
 
+    @staticmethod
+    def _player_to_piece_token(player: Player) -> str:
+        """Convert a Player enum to the concrete board token used in pattern checks."""
+        if player == Player.BLUE:
+            return Piece.BLUE.value
+        if player == Player.RED:
+            return Piece.RED.value
+        raise ValueError(f"Unsupported player for weak-move filtering: {player!r}")
+
+    def _filter_policy_ordered_weak_moves_for_node(
+        self,
+        node: MCTSNode,
+        legal_logits: np.ndarray,
+    ) -> PolicyOrderedMoveFilterResult:
+        """Run the new per-move weak-move filter on one node in policy order."""
+        if legal_logits.shape[0] != len(node.legal_moves):
+            raise ValueError(
+                "legal_logits length must match node.legal_moves length, got "
+                f"{legal_logits.shape[0]} vs {len(node.legal_moves)}"
+            )
+        return select_policy_ordered_weak_moves(
+            node.state.board,
+            node.legal_moves,
+            legal_logits,
+            player_color=self._player_to_piece_token(node.to_play),
+            enable_four_run=self.cfg.dead_cell_enable_four_run,
+            enable_two_two_split=self.cfg.dead_cell_enable_two_two_split,
+            enable_three_plus_one=self.cfg.dead_cell_enable_three_plus_one,
+        )
+
+    def _log_root_weak_move_filter_event(
+        self,
+        *,
+        node: MCTSNode,
+        legal_moves_before: Sequence[Tuple[int, int]],
+        filter_result: PolicyOrderedMoveFilterResult,
+        legal_moves_before_count: int,
+    ) -> None:
+        """Append JSONL debug records for root weak-move filtering events."""
+        log_path = self.cfg.dead_cell_debug_log_path
+        if not log_path:
+            return
+
+        max_records = int(self.cfg.dead_cell_debug_max_records_per_move)
+        move_records_written = 0
+        keep_index_set = set(filter_result.keep_indices)
+        for idx in filter_result.weak_filtered_indices:
+            if max_records > 0 and move_records_written >= max_records:
+                break
+            classification = filter_result.classifications_by_index.get(idx)
+            if classification is None:
+                continue
+
+            if idx < 0 or idx >= len(legal_moves_before):
+                raise RuntimeError(
+                    "Root weak-move debug logging received an out-of-bounds filtered index: "
+                    f"idx={idx}, legal_moves_before_count={len(legal_moves_before)}"
+                )
+
+            row, col = legal_moves_before[idx]
+            move_records_written += 1
+            self._dead_cell_debug_records_written += 1
+            event = {
+                "event_type": "weak_move_filter_root",
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                "strategy_label": self.cfg.dead_cell_debug_strategy_label,
+                "state_trmph": node.state.to_trmph(),
+                "move_index_to_play": int(len(node.state.move_history) + 1),
+                "current_player": str(node.state.current_player_enum.name).lower(),
+                "filtered_move": {
+                    "row": int(row),
+                    "col": int(col),
+                    "trmph": rowcol_to_trmph(row, col, node.board_size),
+                },
+                "status": classification.status,
+                "rules": list(classification.reasons),
+                "vulnerable_reply_moves": [
+                    self._move_to_debug_payload(move, node.board_size)
+                    for move in classification.vulnerable_reply_moves
+                ],
+                "keep_moves_total": int(len(filter_result.keep_indices)),
+                "safe_moves_total": int(len(filter_result.safe_indices)),
+                "vulnerable_moves_total": int(len(filter_result.vulnerable_indices)),
+                "dead_moves_total": int(len(filter_result.dead_indices)),
+                "legal_moves_before_count": int(legal_moves_before_count),
+                "keep_indices": [int(i) for i in filter_result.keep_indices],
+                "keep_index_set_size": int(len(keep_index_set)),
+                "mask_config": {
+                    "enable_four_run": bool(self.cfg.dead_cell_enable_four_run),
+                    "enable_two_two_split": bool(self.cfg.dead_cell_enable_two_two_split),
+                    "enable_three_plus_one": bool(self.cfg.dead_cell_enable_three_plus_one),
+                    "enable_a1b2a3_discouraged": bool(
+                        self.cfg.dead_cell_enable_a1b2a3_discouraged
+                    ),
+                    "enable_double_dead_pairs": bool(self.cfg.dead_cell_enable_double_dead_pairs),
+                },
+            }
+            self._append_dead_cell_debug_event(log_path, event)
+
     def _expand_node_from_policy(self, node: MCTSNode, policy_logits_np: np.ndarray, board_size: int, action_size: int):
         """Set node.P over legal actions using softmax of legal logits; mark expanded."""
         if node.is_terminal:
@@ -2059,6 +2240,56 @@ class BaselineMCTS(MCTSGumbelMixin):
         if policy_logits_np.shape[0] != action_size:
             raise ValueError(f"Policy logits shape mismatch: expected {action_size}, got {policy_logits_np.shape[0]}")
         logits = policy_logits_np.astype(np.float64, copy=False)
+
+        if self.cfg.enable_terminal_move_detection:
+            self._detect_terminal_moves_if_enabled(node)
+            terminal_keep_indices = [
+                i for i, is_terminal in enumerate(node.terminal_moves) if is_terminal
+            ]
+            if terminal_keep_indices:
+                node.filter_actions_by_keep_indices(
+                    terminal_keep_indices,
+                    context="terminal-only move filter",
+                )
+
+        filter_result: PolicyOrderedMoveFilterResult | None = None
+        if (
+            self.cfg.enable_dead_cell_pruning
+            and not any(node.terminal_moves)
+            and node.legal_moves
+        ):
+            legal_moves_before = list(node.legal_moves)
+            legal_moves_before_count = len(node.legal_moves)
+            legal_logits_before = logits[node.legal_indices]
+            filter_result = self._filter_policy_ordered_weak_moves_for_node(
+                node,
+                legal_logits_before,
+            )
+            if not filter_result.keep_indices:
+                raise RuntimeError(
+                    "Weak-move filtering removed all legal moves from a non-terminal state. "
+                    "This likely indicates an incorrect dead/vulnerable motif."
+                )
+            if len(filter_result.keep_indices) < len(node.legal_moves):
+                node.filter_actions_by_keep_indices(
+                    list(filter_result.keep_indices),
+                    context="weak-move candidate filter",
+                )
+                self._dead_cell_pruned_moves_total += (
+                    legal_moves_before_count - len(filter_result.keep_indices)
+                )
+                self._dead_cell_pruned_nodes_total += 1
+            if node.depth == 0:
+                self._root_only_vulnerable_fallback = bool(
+                    filter_result.only_vulnerable_remaining
+                )
+                if self.cfg.dead_cell_debug_log_path and filter_result.weak_filtered_indices:
+                    self._log_root_weak_move_filter_event(
+                        node=node,
+                        legal_moves_before=legal_moves_before,
+                        filter_result=filter_result,
+                        legal_moves_before_count=legal_moves_before_count,
+                    )
 
         legal_logits = logits[node.legal_indices] if len(node.legal_indices) > 0 else np.array([0.0], dtype=np.float64)
         node.P = softmax_np(legal_logits)
