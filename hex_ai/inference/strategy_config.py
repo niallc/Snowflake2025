@@ -35,6 +35,54 @@ DEFAULT_DEAD_CELL_ENABLE_A1B2A3_DISCOURAGED = True
 DEFAULT_DEAD_CELL_ENABLE_DOUBLE_DEAD_PAIRS = False
 
 
+def _validate_dead_cell_settings_supported(
+    *,
+    strategy_type: str,
+    strategy_name: str,
+    strategy_index: int,
+    participant_config: Dict[str, Any],
+) -> None:
+    """Fail fast when dead-cell settings are requested for unsupported strategies."""
+    if strategy_type == "mcts":
+        return
+
+    if participant_config.get(
+        "enable_dead_cell_pruning", DEFAULT_ENABLE_DEAD_CELL_PRUNING
+    ):
+        raise ValueError(
+            "Dead-cell pruning is only supported for MCTS strategies. "
+            f"Strategy {strategy_index + 1} ({strategy_name!r}) uses {strategy_type!r} "
+            "but requested enable_dead_cell_pruning=True."
+        )
+
+    non_default_dead_cell_fields: List[str] = []
+    for field_name, default_value in (
+        ("dead_cell_enable_four_run", DEFAULT_DEAD_CELL_ENABLE_FOUR_RUN),
+        ("dead_cell_enable_two_two_split", DEFAULT_DEAD_CELL_ENABLE_TWO_TWO_SPLIT),
+        ("dead_cell_enable_three_plus_one", DEFAULT_DEAD_CELL_ENABLE_THREE_PLUS_ONE),
+        (
+            "dead_cell_enable_a1b2a3_discouraged",
+            DEFAULT_DEAD_CELL_ENABLE_A1B2A3_DISCOURAGED,
+        ),
+        (
+            "dead_cell_enable_double_dead_pairs",
+            DEFAULT_DEAD_CELL_ENABLE_DOUBLE_DEAD_PAIRS,
+        ),
+    ):
+        if participant_config.get(field_name, default_value) != default_value:
+            non_default_dead_cell_fields.append(
+                f"{field_name}={participant_config[field_name]}"
+            )
+
+    if non_default_dead_cell_fields:
+        rendered_fields = ", ".join(non_default_dead_cell_fields)
+        raise ValueError(
+            "Dead-cell motif overrides are only supported for MCTS strategies. "
+            f"Strategy {strategy_index + 1} ({strategy_name!r}) uses {strategy_type!r} "
+            f"but received non-default dead-cell settings: {rendered_fields}."
+        )
+
+
 @dataclass
 class StrategyConfig:
     """Configuration for a single strategy."""
@@ -84,6 +132,12 @@ def create_strategy_configs_from_unified_config(unified_config: UnifiedTournamen
         # Create strategy config
         strategy_name = unified_config.strategies[i]
         strategy_type = _determine_strategy_type(strategy_name)
+        _validate_dead_cell_settings_supported(
+            strategy_type=strategy_type,
+            strategy_name=strategy_name,
+            strategy_index=i,
+            participant_config=participant_config,
+        )
         
         # Build config dictionary.
         if strategy_type == "mcts":
@@ -134,9 +188,8 @@ def create_strategy_configs_from_unified_config(unified_config: UnifiedTournamen
                 ),
             }
         elif strategy_type == "policy":
-            # Policy strategies need minimal config - just temperature for consistency
-            # The temperature is also stored as a separate field on StrategyConfig
-            config_dict = {}  # Temperature is handled separately.
+            # Policy strategies need minimal config - just temperature for consistency.
+            config_dict = {}
         else:
             config_dict = {}
         
