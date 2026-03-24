@@ -1,0 +1,1427 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ladder Template Annotator</title>
+  <style>
+    :root {
+      --bg: #f3efe4;
+      --panel: #fffdf7;
+      --ink: #1f1f1b;
+      --muted: #6d665b;
+      --line: #d8d1c3;
+      --accent: #205f52;
+      --accent-soft: #e5f0ec;
+      --empty: #f3ede0;
+      --ignored-stroke: rgba(90, 84, 73, 0.28);
+      --red: #f23b2d;
+      --red-dark: #8c2418;
+      --blue: #2c7ac4;
+      --blue-dark: #174b79;
+      --plus: #1f1f1b;
+      --minus: #1f1f1b;
+      --shaded: rgba(70, 78, 90, 0.42);
+      --shadow: 0 12px 28px rgba(41, 35, 25, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, #fffef9 0%, #f6f2e8 28%, var(--bg) 62%);
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 360px minmax(0, 1fr);
+      gap: 18px;
+      min-height: 100vh;
+      padding: 18px;
+    }
+
+    .panel,
+    .viewer-panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .panel {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      overflow: auto;
+    }
+
+    .viewer-panel {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      min-height: 0;
+    }
+
+    .title {
+      margin: 0;
+      font-size: 1.25rem;
+      color: var(--accent);
+      letter-spacing: 0.01em;
+    }
+
+    .subtitle,
+    .hint,
+    .status-line,
+    .small-copy {
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.45;
+    }
+
+    .subtitle {
+      margin: 0;
+    }
+
+    .section {
+      border-top: 1px solid var(--line);
+      padding-top: 14px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .section:first-of-type {
+      border-top: 0;
+      padding-top: 0;
+    }
+
+    .section-title {
+      margin: 0;
+      font-size: 0.82rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 0.92rem;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    select,
+    textarea,
+    button {
+      font: inherit;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    select,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: #fff;
+      color: var(--ink);
+    }
+
+    textarea {
+      min-height: 140px;
+      resize: vertical;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.84rem;
+      line-height: 1.5;
+    }
+
+    input[type="file"] {
+      font: inherit;
+      color: var(--muted);
+    }
+
+    button {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      color: var(--ink);
+      padding: 9px 12px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      border-color: #bbb39f;
+      background: #fffefb;
+    }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .button-row button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .check-row {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .check-row label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.9rem;
+    }
+
+    .palette {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .palette button {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      justify-content: flex-start;
+      min-height: 42px;
+    }
+
+    .palette button.active {
+      background: var(--accent-soft);
+      border-color: #7fa69a;
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    .swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(35, 35, 35, 0.2);
+      display: inline-block;
+      flex: 0 0 auto;
+    }
+
+    .swatch.ignored {
+      background: rgba(0, 0, 0, 0.02);
+      border-style: dashed;
+    }
+
+    .swatch.empty {
+      background: var(--empty);
+    }
+
+    .swatch.red {
+      background: var(--red);
+      border-color: var(--red-dark);
+    }
+
+    .swatch.blue {
+      background: var(--blue);
+      border-color: var(--blue-dark);
+    }
+
+    .swatch.plus,
+    .swatch.minus {
+      background: #fff;
+      position: relative;
+    }
+
+    .swatch.plus::before,
+    .swatch.plus::after,
+    .swatch.minus::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      background: #222;
+      transform: translate(-50%, -50%);
+      border-radius: 999px;
+    }
+
+    .swatch.plus::before,
+    .swatch.minus::before {
+      width: 8px;
+      height: 2px;
+    }
+
+    .swatch.plus::after {
+      width: 2px;
+      height: 8px;
+    }
+
+    .swatch.shaded {
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.26) 0 28%, transparent 28% 50%, rgba(255, 255, 255, 0.26) 50% 78%, transparent 78% 100%),
+        rgba(74, 78, 92, 0.48);
+      border-color: rgba(47, 52, 62, 0.45);
+    }
+
+    .viewer-toolbar {
+      padding: 14px 16px 10px 16px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .viewer-stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .viewer-scroll {
+      min-height: 0;
+      overflow: auto;
+      padding: 16px;
+      background:
+        linear-gradient(transparent 0, transparent calc(100% - 1px), rgba(0, 0, 0, 0.05) calc(100% - 1px), rgba(0, 0, 0, 0.05) 100%),
+        linear-gradient(90deg, transparent 0, transparent calc(100% - 1px), rgba(0, 0, 0, 0.05) calc(100% - 1px), rgba(0, 0, 0, 0.05) 100%);
+      background-size: 36px 36px;
+    }
+
+    .viewer-stage {
+      position: relative;
+      margin: 0 auto;
+      background: rgba(255, 255, 255, 0.68);
+      border: 1px dashed rgba(108, 102, 91, 0.25);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+
+    .source-image {
+      position: absolute;
+      left: 0;
+      top: 0;
+      user-select: none;
+      pointer-events: none;
+      transform-origin: top left;
+    }
+
+    .overlay-svg {
+      position: absolute;
+      left: 0;
+      top: 0;
+    }
+
+    .cell-hit {
+      cursor: pointer;
+    }
+
+    .cell-outline {
+      fill: rgba(255, 255, 255, 0.02);
+      stroke: var(--ignored-stroke);
+      stroke-width: 1;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .cell-outline.hovered {
+      stroke: #4e8a7b;
+      stroke-width: 1.6;
+    }
+
+    .cell-fill.empty {
+      fill: rgba(243, 237, 224, 0.6);
+    }
+
+    .cell-fill.shaded {
+      fill: rgba(74, 78, 92, 0.26);
+    }
+
+    .disc.red {
+      fill: var(--red);
+      stroke: var(--red-dark);
+      stroke-width: 1.7;
+    }
+
+    .disc.blue {
+      fill: var(--blue);
+      stroke: var(--blue-dark);
+      stroke-width: 1.7;
+    }
+
+    .marker-text {
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      font-weight: 800;
+      text-anchor: middle;
+      dominant-baseline: central;
+      fill: #171717;
+      user-select: none;
+      pointer-events: none;
+    }
+
+    .coord-text {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 10px;
+      fill: rgba(40, 36, 32, 0.56);
+      text-anchor: middle;
+      dominant-baseline: middle;
+      pointer-events: none;
+      user-select: none;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 12px;
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-line {
+      border-top: 1px solid var(--line);
+      padding: 10px 16px 14px 16px;
+      min-height: 48px;
+    }
+
+    .cell-list {
+      max-height: 220px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+    }
+
+    .cell-item {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 8px 10px;
+      border-top: 1px solid rgba(216, 209, 195, 0.65);
+      font-size: 0.88rem;
+    }
+
+    .cell-item:first-child {
+      border-top: 0;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 8px;
+      background: #fffefb;
+      font-size: 0.8rem;
+    }
+
+    .mono {
+      font-family: "SFMono-Regular", Consolas, monospace;
+    }
+
+    @media (max-width: 1100px) {
+      .shell {
+        grid-template-columns: 1fr;
+      }
+      .panel {
+        max-height: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="panel">
+      <div>
+        <h1 class="title">Ladder Template Annotator</h1>
+        <p class="subtitle">
+          Manual-first annotation tool for local Hex templates. The JSON it exports is designed so an
+          OpenCV prefill step can populate the same structure later.
+        </p>
+      </div>
+
+      <section class="section">
+        <h2 class="section-title">Metadata</h2>
+        <label>
+          Template name
+          <input id="nameInput" type="text" placeholder="e.g. fourth_row_escape_iiia_variant" />
+        </label>
+        <label>
+          Family / source tag
+          <input id="familyInput" type="text" placeholder="e.g. hexwiki_ladder_escape" />
+        </label>
+        <div class="grid-2">
+          <label>
+            Attacker
+            <select id="attackerInput">
+              <option value="red">red</option>
+              <option value="blue">blue</option>
+            </select>
+          </label>
+          <label>
+            Target edge
+            <select id="targetEdgeInput">
+              <option value="none">none</option>
+              <option value="red_bottom">red_bottom</option>
+              <option value="red_top">red_top</option>
+              <option value="blue_left">blue_left</option>
+              <option value="blue_right">blue_right</option>
+            </select>
+          </label>
+        </div>
+        <div class="check-row">
+          <label><input id="openLeftInput" type="checkbox" /> Open left</label>
+          <label><input id="openRightInput" type="checkbox" /> Open right</label>
+          <label><input id="showCoordsInput" type="checkbox" /> Show coords</label>
+        </div>
+        <label>
+          Notes
+          <textarea id="notesInput" placeholder="Optional notes, theorem references, or review remarks"></textarea>
+        </label>
+      </section>
+
+      <section class="section">
+        <h2 class="section-title">Image</h2>
+        <label>
+          Load source image
+          <input id="imageInput" type="file" accept="image/*" />
+        </label>
+        <div class="grid-2">
+          <label>
+            Image opacity
+            <input id="imageOpacityInput" type="number" step="0.05" min="0" max="1" value="0.8" />
+          </label>
+          <label>
+            Image scale
+            <input id="imageScaleInput" type="number" step="0.05" min="0.05" value="1" />
+          </label>
+        </div>
+        <div class="button-row">
+          <button id="clearImageButton" type="button">Clear image</button>
+        </div>
+        <p class="hint">
+          Use the source image as a guide only. The exported JSON stores the image name and current alignment
+          settings, but not the image bytes.
+        </p>
+      </section>
+
+      <section class="section">
+        <h2 class="section-title">Grid</h2>
+        <div class="grid-2">
+          <label>
+            Rows
+            <input id="rowsInput" type="number" min="1" step="1" value="7" />
+          </label>
+          <label>
+            Cols
+            <input id="colsInput" type="number" min="1" step="1" value="7" />
+          </label>
+        </div>
+        <div class="grid-3">
+          <label>
+            Radius
+            <input id="radiusInput" type="number" min="4" step="1" value="34" />
+          </label>
+          <label>
+            Origin X
+            <input id="originXInput" type="number" step="1" value="80" />
+          </label>
+          <label>
+            Origin Y
+            <input id="originYInput" type="number" step="1" value="80" />
+          </label>
+        </div>
+        <div class="grid-2">
+          <label>
+            Grid opacity
+            <input id="gridOpacityInput" type="number" step="0.05" min="0" max="1" value="1" />
+          </label>
+          <label>
+            Hover coord
+            <input id="hoverCoordInput" type="text" value="-" readonly />
+          </label>
+        </div>
+        <div class="button-row">
+          <button id="nudgeLeftButton" type="button">Left</button>
+          <button id="nudgeRightButton" type="button">Right</button>
+          <button id="nudgeUpButton" type="button">Up</button>
+          <button id="nudgeDownButton" type="button">Down</button>
+          <button id="centerGridButton" type="button">Reset origin</button>
+        </div>
+        <p class="hint">
+          Keyboard shortcuts: <span class="mono">0</span> ignored, <span class="mono">1</span> empty,
+          <span class="mono">2</span> red, <span class="mono">3</span> blue, <span class="mono">4</span> plus,
+          <span class="mono">5</span> minus, <span class="mono">6</span> shaded. Arrow keys nudge the grid when
+          focus is not in a text field. Right-click a cell to erase it.
+        </p>
+      </section>
+
+      <section class="section">
+        <h2 class="section-title">Paint</h2>
+        <div id="palette" class="palette"></div>
+        <div class="button-row">
+          <button id="clearCellsButton" type="button">Clear cells</button>
+          <button id="loadExampleButton" type="button">Load example</button>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2 class="section-title">Export / Import</h2>
+        <div class="button-row">
+          <button id="refreshJsonButton" class="primary" type="button">Refresh JSON</button>
+          <button id="copyJsonButton" type="button">Copy JSON</button>
+          <button id="downloadJsonButton" type="button">Download JSON</button>
+        </div>
+        <label>
+          Annotation JSON
+          <textarea id="jsonOutput"></textarea>
+        </label>
+        <div class="button-row">
+          <button id="applyJsonButton" type="button">Apply JSON</button>
+          <label class="small-copy">
+            Import JSON file
+            <input id="jsonFileInput" type="file" accept=".json,application/json" />
+          </label>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2 class="section-title">Annotated cells</h2>
+        <div id="cellList" class="cell-list"></div>
+      </section>
+    </aside>
+
+    <section class="viewer-panel">
+      <div class="viewer-toolbar">
+        <div>
+          <h2 class="title" style="font-size:1.06rem; margin:0;">Overlay View</h2>
+          <p class="small-copy" style="margin:4px 0 0 0;">
+            Click to paint the selected state. Click again with the same state selected to toggle back to ignored.
+          </p>
+        </div>
+        <div class="viewer-stats">
+          <span id="statImage">image: none</span>
+          <span id="statCells">cells: 0</span>
+          <span id="statActive">paint: empty</span>
+        </div>
+      </div>
+
+      <div class="viewer-scroll">
+        <div id="viewerStage" class="viewer-stage">
+          <img id="sourceImage" class="source-image" alt="" />
+          <svg id="overlaySvg" class="overlay-svg"></svg>
+        </div>
+      </div>
+
+      <div class="status-line">
+        <div class="legend">
+          <span class="legend-item"><span class="swatch ignored"></span> ignored / outside template</span>
+          <span class="legend-item"><span class="swatch empty"></span> empty carrier cell</span>
+          <span class="legend-item"><span class="swatch red"></span> red stone</span>
+          <span class="legend-item"><span class="swatch blue"></span> blue stone</span>
+          <span class="legend-item"><span class="swatch plus"></span> left boundary (+)</span>
+          <span class="legend-item"><span class="swatch minus"></span> right boundary (-)</span>
+          <span class="legend-item"><span class="swatch shaded"></span> shaded / excluded cell</span>
+        </div>
+        <div id="statusText" class="small-copy">
+          Ready. Load an image, align the grid, paint cells, and export JSON.
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    (function () {
+      "use strict";
+
+      const SVG_NS = "http://www.w3.org/2000/svg";
+      const PALETTE_STATES = [
+        { id: "ignored", label: "Ignored", key: "0" },
+        { id: "empty", label: "Empty", key: "1" },
+        { id: "red", label: "Red stone", key: "2" },
+        { id: "blue", label: "Blue stone", key: "3" },
+        { id: "plus", label: "Boundary +", key: "4" },
+        { id: "minus", label: "Boundary -", key: "5" },
+        { id: "shaded", label: "Shaded", key: "6" },
+      ];
+
+      const dom = {
+        nameInput: document.getElementById("nameInput"),
+        familyInput: document.getElementById("familyInput"),
+        attackerInput: document.getElementById("attackerInput"),
+        targetEdgeInput: document.getElementById("targetEdgeInput"),
+        openLeftInput: document.getElementById("openLeftInput"),
+        openRightInput: document.getElementById("openRightInput"),
+        showCoordsInput: document.getElementById("showCoordsInput"),
+        notesInput: document.getElementById("notesInput"),
+        imageInput: document.getElementById("imageInput"),
+        imageOpacityInput: document.getElementById("imageOpacityInput"),
+        imageScaleInput: document.getElementById("imageScaleInput"),
+        clearImageButton: document.getElementById("clearImageButton"),
+        rowsInput: document.getElementById("rowsInput"),
+        colsInput: document.getElementById("colsInput"),
+        radiusInput: document.getElementById("radiusInput"),
+        originXInput: document.getElementById("originXInput"),
+        originYInput: document.getElementById("originYInput"),
+        gridOpacityInput: document.getElementById("gridOpacityInput"),
+        hoverCoordInput: document.getElementById("hoverCoordInput"),
+        nudgeLeftButton: document.getElementById("nudgeLeftButton"),
+        nudgeRightButton: document.getElementById("nudgeRightButton"),
+        nudgeUpButton: document.getElementById("nudgeUpButton"),
+        nudgeDownButton: document.getElementById("nudgeDownButton"),
+        centerGridButton: document.getElementById("centerGridButton"),
+        palette: document.getElementById("palette"),
+        clearCellsButton: document.getElementById("clearCellsButton"),
+        loadExampleButton: document.getElementById("loadExampleButton"),
+        refreshJsonButton: document.getElementById("refreshJsonButton"),
+        copyJsonButton: document.getElementById("copyJsonButton"),
+        downloadJsonButton: document.getElementById("downloadJsonButton"),
+        jsonOutput: document.getElementById("jsonOutput"),
+        applyJsonButton: document.getElementById("applyJsonButton"),
+        jsonFileInput: document.getElementById("jsonFileInput"),
+        cellList: document.getElementById("cellList"),
+        viewerStage: document.getElementById("viewerStage"),
+        sourceImage: document.getElementById("sourceImage"),
+        overlaySvg: document.getElementById("overlaySvg"),
+        statusText: document.getElementById("statusText"),
+        statImage: document.getElementById("statImage"),
+        statCells: document.getElementById("statCells"),
+        statActive: document.getElementById("statActive"),
+      };
+
+      const state = {
+        activePaint: "empty",
+        hoveredKey: null,
+        image: {
+          name: "",
+          src: "",
+          width: 0,
+          height: 0,
+        },
+        annotation: {
+          schema_version: 1,
+          kind: "ladder_template_annotation",
+          coord_system: "row_col_offset",
+          metadata: {
+            name: "",
+            family: "",
+            attacker: "red",
+            target_edge: "none",
+            open_left: false,
+            open_right: false,
+            notes: "",
+          },
+          grid: {
+            rows: 7,
+            cols: 7,
+            radius: 34,
+            origin_x: 80,
+            origin_y: 80,
+            grid_opacity: 1,
+            show_coords: false,
+          },
+          image_overlay: {
+            image_name: "",
+            image_width: 0,
+            image_height: 0,
+            image_opacity: 0.8,
+            image_scale: 1,
+          },
+          cells: [],
+        },
+      };
+
+      function keyFor(row, col) {
+        return row + "," + col;
+      }
+
+      function cellsMapFromArray(cells) {
+        const map = new Map();
+        for (const cell of cells) {
+          if (!cell || !Number.isFinite(cell.row) || !Number.isFinite(cell.col) || typeof cell.state !== "string") {
+            continue;
+          }
+          if (cell.state === "ignored") {
+            continue;
+          }
+          map.set(keyFor(cell.row, cell.col), { row: cell.row, col: cell.col, state: cell.state });
+        }
+        return map;
+      }
+
+      function sortedCellsArrayFromMap(map) {
+        return Array.from(map.values())
+          .sort((a, b) => (a.row - b.row) || (a.col - b.col) || a.state.localeCompare(b.state))
+          .map((cell) => ({ row: cell.row, col: cell.col, state: cell.state }));
+      }
+
+      function getCellsMap() {
+        return cellsMapFromArray(state.annotation.cells);
+      }
+
+      function setCellsMap(map) {
+        state.annotation.cells = sortedCellsArrayFromMap(map);
+      }
+
+      function hexCenter(row, col, radius) {
+        return {
+          x: state.annotation.grid.origin_x + radius * Math.sqrt(3) * (col + row / 2),
+          y: state.annotation.grid.origin_y + radius * 1.5 * row,
+        };
+      }
+
+      function hexPoints(centerX, centerY, radius) {
+        const points = [];
+        for (let i = 0; i < 6; i += 1) {
+          const angle = (Math.PI / 3) * i + Math.PI / 6;
+          points.push([
+            centerX + radius * Math.cos(angle),
+            centerY + radius * Math.sin(angle),
+          ]);
+        }
+        return points;
+      }
+
+      function coordLabel(row, col) {
+        return "r" + row + " c" + col;
+      }
+
+      function computeStageBounds() {
+        const radius = state.annotation.grid.radius;
+        const rows = state.annotation.grid.rows;
+        const cols = state.annotation.grid.cols;
+        let maxX = state.annotation.grid.origin_x + radius * 2;
+        let maxY = state.annotation.grid.origin_y + radius * 2;
+        for (let row = 0; row < rows; row += 1) {
+          for (let col = 0; col < cols; col += 1) {
+            const center = hexCenter(row, col, radius);
+            maxX = Math.max(maxX, center.x + radius * 1.2);
+            maxY = Math.max(maxY, center.y + radius * 1.2);
+          }
+        }
+        const scaledImageWidth = state.image.width * state.annotation.image_overlay.image_scale;
+        const scaledImageHeight = state.image.height * state.annotation.image_overlay.image_scale;
+        maxX = Math.max(maxX, scaledImageWidth);
+        maxY = Math.max(maxY, scaledImageHeight);
+        return {
+          width: Math.max(480, Math.ceil(maxX + radius * 2)),
+          height: Math.max(360, Math.ceil(maxY + radius * 2)),
+        };
+      }
+
+      function paintCell(row, col, paintState) {
+        const cells = getCellsMap();
+        const key = keyFor(row, col);
+        const current = cells.get(key);
+        if (paintState === "ignored") {
+          cells.delete(key);
+        } else if (current && current.state === paintState) {
+          cells.delete(key);
+        } else {
+          cells.set(key, { row, col, state: paintState });
+        }
+        setCellsMap(cells);
+        render();
+      }
+
+      function setActivePaint(paintState) {
+        state.activePaint = paintState;
+        for (const button of dom.palette.querySelectorAll("button[data-state]")) {
+          button.classList.toggle("active", button.dataset.state === paintState);
+        }
+        dom.statActive.textContent = "paint: " + paintState;
+      }
+
+      function setStatus(text) {
+        dom.statusText.textContent = text;
+      }
+
+      function loadFormFromState() {
+        dom.nameInput.value = state.annotation.metadata.name;
+        dom.familyInput.value = state.annotation.metadata.family;
+        dom.attackerInput.value = state.annotation.metadata.attacker;
+        dom.targetEdgeInput.value = state.annotation.metadata.target_edge;
+        dom.openLeftInput.checked = !!state.annotation.metadata.open_left;
+        dom.openRightInput.checked = !!state.annotation.metadata.open_right;
+        dom.showCoordsInput.checked = !!state.annotation.grid.show_coords;
+        dom.notesInput.value = state.annotation.metadata.notes;
+        dom.rowsInput.value = state.annotation.grid.rows;
+        dom.colsInput.value = state.annotation.grid.cols;
+        dom.radiusInput.value = state.annotation.grid.radius;
+        dom.originXInput.value = state.annotation.grid.origin_x;
+        dom.originYInput.value = state.annotation.grid.origin_y;
+        dom.gridOpacityInput.value = state.annotation.grid.grid_opacity;
+        dom.imageOpacityInput.value = state.annotation.image_overlay.image_opacity;
+        dom.imageScaleInput.value = state.annotation.image_overlay.image_scale;
+      }
+
+      function syncStateFromForm() {
+        state.annotation.metadata.name = dom.nameInput.value.trim();
+        state.annotation.metadata.family = dom.familyInput.value.trim();
+        state.annotation.metadata.attacker = dom.attackerInput.value;
+        state.annotation.metadata.target_edge = dom.targetEdgeInput.value;
+        state.annotation.metadata.open_left = dom.openLeftInput.checked;
+        state.annotation.metadata.open_right = dom.openRightInput.checked;
+        state.annotation.metadata.notes = dom.notesInput.value;
+        state.annotation.grid.show_coords = dom.showCoordsInput.checked;
+        state.annotation.grid.rows = Math.max(1, Number.parseInt(dom.rowsInput.value, 10) || 1);
+        state.annotation.grid.cols = Math.max(1, Number.parseInt(dom.colsInput.value, 10) || 1);
+        state.annotation.grid.radius = Math.max(4, Number.parseFloat(dom.radiusInput.value) || 4);
+        state.annotation.grid.origin_x = Number.parseFloat(dom.originXInput.value) || 0;
+        state.annotation.grid.origin_y = Number.parseFloat(dom.originYInput.value) || 0;
+        state.annotation.grid.grid_opacity = clamp(Number.parseFloat(dom.gridOpacityInput.value), 0, 1, 1);
+        state.annotation.image_overlay.image_opacity = clamp(Number.parseFloat(dom.imageOpacityInput.value), 0, 1, 1);
+        state.annotation.image_overlay.image_scale = Math.max(0.05, Number.parseFloat(dom.imageScaleInput.value) || 1);
+        state.annotation.image_overlay.image_name = state.image.name || "";
+        state.annotation.image_overlay.image_width = state.image.width || 0;
+        state.annotation.image_overlay.image_height = state.image.height || 0;
+      }
+
+      function clamp(value, min, max, fallback) {
+        if (!Number.isFinite(value)) {
+          return fallback;
+        }
+        if (value < min) {
+          return min;
+        }
+        if (value > max) {
+          return max;
+        }
+        return value;
+      }
+
+      function refreshJsonOutput() {
+        syncStateFromForm();
+        dom.jsonOutput.value = JSON.stringify(state.annotation, null, 2);
+      }
+
+      function renderCellList() {
+        const cells = sortedCellsArrayFromMap(getCellsMap());
+        dom.cellList.innerHTML = "";
+        if (cells.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "cell-item";
+          empty.innerHTML = "<span class=\"small-copy\">No annotated cells yet.</span>";
+          dom.cellList.appendChild(empty);
+          return;
+        }
+
+        for (const cell of cells) {
+          const row = document.createElement("div");
+          row.className = "cell-item";
+          const pill = document.createElement("span");
+          pill.className = "pill";
+          pill.innerHTML = "<span class=\"swatch " + cell.state + "\"></span>" + cell.state;
+          const coord = document.createElement("span");
+          coord.className = "mono";
+          coord.textContent = coordLabel(cell.row, cell.col);
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.textContent = "Remove";
+          remove.addEventListener("click", function () {
+            paintCell(cell.row, cell.col, "ignored");
+          });
+          row.appendChild(pill);
+          row.appendChild(coord);
+          row.appendChild(remove);
+          dom.cellList.appendChild(row);
+        }
+      }
+
+      function renderSvg() {
+        const bounds = computeStageBounds();
+        dom.viewerStage.style.width = bounds.width + "px";
+        dom.viewerStage.style.height = bounds.height + "px";
+
+        dom.sourceImage.style.opacity = String(state.annotation.image_overlay.image_opacity);
+        dom.sourceImage.style.transform = "scale(" + state.annotation.image_overlay.image_scale + ")";
+        dom.sourceImage.style.display = state.image.src ? "block" : "none";
+        if (state.image.src) {
+          dom.sourceImage.src = state.image.src;
+          dom.sourceImage.width = state.image.width;
+          dom.sourceImage.height = state.image.height;
+        } else {
+          dom.sourceImage.removeAttribute("src");
+          dom.sourceImage.removeAttribute("width");
+          dom.sourceImage.removeAttribute("height");
+        }
+
+        dom.overlaySvg.setAttribute("width", String(bounds.width));
+        dom.overlaySvg.setAttribute("height", String(bounds.height));
+        dom.overlaySvg.setAttribute("viewBox", "0 0 " + bounds.width + " " + bounds.height);
+        dom.overlaySvg.style.opacity = String(state.annotation.grid.grid_opacity);
+
+        while (dom.overlaySvg.firstChild) {
+          dom.overlaySvg.removeChild(dom.overlaySvg.firstChild);
+        }
+
+        const cells = getCellsMap();
+        const radius = state.annotation.grid.radius;
+        const rows = state.annotation.grid.rows;
+        const cols = state.annotation.grid.cols;
+
+        for (let row = 0; row < rows; row += 1) {
+          for (let col = 0; col < cols; col += 1) {
+            const key = keyFor(row, col);
+            const cell = cells.get(key);
+            const center = hexCenter(row, col, radius);
+            const points = hexPoints(center.x, center.y, radius);
+            const group = document.createElementNS(SVG_NS, "g");
+            group.dataset.row = String(row);
+            group.dataset.col = String(col);
+            group.dataset.key = key;
+            group.classList.add("cell-hit");
+
+            if (cell && (cell.state === "empty" || cell.state === "shaded")) {
+              const fill = document.createElementNS(SVG_NS, "polygon");
+              fill.setAttribute("points", points.map((point) => point.join(",")).join(" "));
+              fill.setAttribute("class", "cell-fill " + cell.state);
+              group.appendChild(fill);
+            }
+
+            const outline = document.createElementNS(SVG_NS, "polygon");
+            outline.setAttribute("points", points.map((point) => point.join(",")).join(" "));
+            outline.setAttribute("class", "cell-outline" + (state.hoveredKey === key ? " hovered" : ""));
+            group.appendChild(outline);
+
+            if (cell && (cell.state === "red" || cell.state === "blue")) {
+              const disc = document.createElementNS(SVG_NS, "circle");
+              disc.setAttribute("cx", String(center.x));
+              disc.setAttribute("cy", String(center.y));
+              disc.setAttribute("r", String(radius * 0.58));
+              disc.setAttribute("class", "disc " + cell.state);
+              group.appendChild(disc);
+            } else if (cell && (cell.state === "plus" || cell.state === "minus")) {
+              const marker = document.createElementNS(SVG_NS, "text");
+              marker.setAttribute("x", String(center.x));
+              marker.setAttribute("y", String(center.y + 1));
+              marker.setAttribute("class", "marker-text");
+              marker.setAttribute("font-size", String(radius * 0.95));
+              marker.textContent = cell.state === "plus" ? "+" : "\u2212";
+              group.appendChild(marker);
+            }
+
+            if (state.annotation.grid.show_coords) {
+              const coord = document.createElementNS(SVG_NS, "text");
+              coord.setAttribute("x", String(center.x));
+              coord.setAttribute("y", String(center.y + radius * 0.76));
+              coord.setAttribute("class", "coord-text");
+              coord.textContent = row + "," + col;
+              group.appendChild(coord);
+            }
+
+            dom.overlaySvg.appendChild(group);
+          }
+        }
+
+        dom.statImage.textContent = "image: " + (state.image.name || "none");
+        dom.statCells.textContent = "cells: " + state.annotation.cells.length;
+      }
+
+      function render() {
+        syncStateFromForm();
+        loadFormFromState();
+        renderSvg();
+        renderCellList();
+        refreshJsonOutput();
+      }
+
+      function readJsonFromTextarea() {
+        const raw = dom.jsonOutput.value.trim();
+        if (!raw) {
+          throw new Error("JSON textarea is empty.");
+        }
+        return JSON.parse(raw);
+      }
+
+      function applyAnnotationPayload(payload) {
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Annotation payload must be an object.");
+        }
+        const next = JSON.parse(JSON.stringify(state.annotation));
+
+        next.schema_version = Number.isFinite(payload.schema_version) ? payload.schema_version : 1;
+        next.kind = typeof payload.kind === "string" ? payload.kind : "ladder_template_annotation";
+        next.coord_system = typeof payload.coord_system === "string" ? payload.coord_system : "row_col_offset";
+        next.metadata = {
+          name: payload.metadata && typeof payload.metadata.name === "string" ? payload.metadata.name : "",
+          family: payload.metadata && typeof payload.metadata.family === "string" ? payload.metadata.family : "",
+          attacker: payload.metadata && payload.metadata.attacker === "blue" ? "blue" : "red",
+          target_edge: payload.metadata && typeof payload.metadata.target_edge === "string" ? payload.metadata.target_edge : "none",
+          open_left: !!(payload.metadata && payload.metadata.open_left),
+          open_right: !!(payload.metadata && payload.metadata.open_right),
+          notes: payload.metadata && typeof payload.metadata.notes === "string" ? payload.metadata.notes : "",
+        };
+        next.grid = {
+          rows: Math.max(1, Number.parseInt(payload.grid && payload.grid.rows, 10) || 7),
+          cols: Math.max(1, Number.parseInt(payload.grid && payload.grid.cols, 10) || 7),
+          radius: Math.max(4, Number.parseFloat(payload.grid && payload.grid.radius) || 34),
+          origin_x: Number.parseFloat(payload.grid && payload.grid.origin_x) || 80,
+          origin_y: Number.parseFloat(payload.grid && payload.grid.origin_y) || 80,
+          grid_opacity: clamp(Number.parseFloat(payload.grid && payload.grid.grid_opacity), 0, 1, 1),
+          show_coords: !!(payload.grid && payload.grid.show_coords),
+        };
+        next.image_overlay = {
+          image_name: payload.image_overlay && typeof payload.image_overlay.image_name === "string" ? payload.image_overlay.image_name : "",
+          image_width: Number.parseFloat(payload.image_overlay && payload.image_overlay.image_width) || 0,
+          image_height: Number.parseFloat(payload.image_overlay && payload.image_overlay.image_height) || 0,
+          image_opacity: clamp(Number.parseFloat(payload.image_overlay && payload.image_overlay.image_opacity), 0, 1, 0.8),
+          image_scale: Math.max(0.05, Number.parseFloat(payload.image_overlay && payload.image_overlay.image_scale) || 1),
+        };
+        next.cells = Array.isArray(payload.cells)
+          ? payload.cells
+              .filter((cell) => cell && Number.isFinite(cell.row) && Number.isFinite(cell.col) && typeof cell.state === "string")
+              .map((cell) => ({
+                row: Number(cell.row),
+                col: Number(cell.col),
+                state: String(cell.state),
+              }))
+          : [];
+        state.annotation = next;
+
+        loadFormFromState();
+        render();
+      }
+
+      function loadImageFile(file) {
+        if (!file) {
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = function (event) {
+          const image = new Image();
+          image.onload = function () {
+            state.image = {
+              name: file.name,
+              src: String(event.target && event.target.result || ""),
+              width: image.naturalWidth,
+              height: image.naturalHeight,
+            };
+            state.annotation.image_overlay.image_name = file.name;
+            state.annotation.image_overlay.image_width = image.naturalWidth;
+            state.annotation.image_overlay.image_height = image.naturalHeight;
+            render();
+            setStatus("Loaded image " + file.name + " (" + image.naturalWidth + "x" + image.naturalHeight + ").");
+          };
+          image.src = String(event.target && event.target.result || "");
+        };
+        reader.readAsDataURL(file);
+      }
+
+      function clearImage() {
+        state.image = {
+          name: "",
+          src: "",
+          width: 0,
+          height: 0,
+        };
+        state.annotation.image_overlay.image_name = "";
+        state.annotation.image_overlay.image_width = 0;
+        state.annotation.image_overlay.image_height = 0;
+        dom.imageInput.value = "";
+        render();
+        setStatus("Cleared source image.");
+      }
+
+      function nudgeGrid(dx, dy) {
+        state.annotation.grid.origin_x += dx;
+        state.annotation.grid.origin_y += dy;
+        loadFormFromState();
+        render();
+      }
+
+      function downloadJson() {
+        refreshJsonOutput();
+        const blob = new Blob([dom.jsonOutput.value], { type: "application/json" });
+        const link = document.createElement("a");
+        const baseName = state.annotation.metadata.name ? state.annotation.metadata.name.replace(/[^a-z0-9_-]+/gi, "_") : "ladder_template";
+        link.href = URL.createObjectURL(blob);
+        link.download = baseName + ".json";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(link.href);
+      }
+
+      async function copyJson() {
+        refreshJsonOutput();
+        try {
+          await navigator.clipboard.writeText(dom.jsonOutput.value);
+          setStatus("Copied annotation JSON to clipboard.");
+        } catch (error) {
+          setStatus("Clipboard copy failed. You can still copy from the textarea manually.");
+        }
+      }
+
+      function loadExample() {
+        applyAnnotationPayload({
+          schema_version: 1,
+          kind: "ladder_template_annotation",
+          coord_system: "row_col_offset",
+          metadata: {
+            name: "example_fourth_row_escape_fragment",
+            family: "hexwiki_demo",
+            attacker: "red",
+            target_edge: "red_bottom",
+            open_left: true,
+            open_right: false,
+            notes: "Example local fragment showing red stones, left boundary, and bottom-edge intent.",
+          },
+          grid: {
+            rows: 6,
+            cols: 7,
+            radius: 32,
+            origin_x: 84,
+            origin_y: 70,
+            grid_opacity: 1,
+            show_coords: false,
+          },
+          image_overlay: {
+            image_name: "",
+            image_width: 0,
+            image_height: 0,
+            image_opacity: 0.8,
+            image_scale: 1,
+          },
+          cells: [
+            { row: 0, col: 1, state: "red" },
+            { row: 0, col: 2, state: "red" },
+            { row: 0, col: 3, state: "empty" },
+            { row: 1, col: 0, state: "empty" },
+            { row: 1, col: 1, state: "empty" },
+            { row: 1, col: 2, state: "empty" },
+            { row: 1, col: 3, state: "empty" },
+            { row: 2, col: 0, state: "empty" },
+            { row: 2, col: 1, state: "empty" },
+            { row: 2, col: 2, state: "empty" },
+            { row: 2, col: 3, state: "empty" },
+            { row: 3, col: 0, state: "plus" },
+            { row: 3, col: 1, state: "empty" },
+            { row: 3, col: 2, state: "empty" },
+            { row: 3, col: 3, state: "empty" },
+            { row: 3, col: 4, state: "empty" },
+            { row: 4, col: 0, state: "plus" },
+            { row: 4, col: 1, state: "empty" },
+            { row: 4, col: 2, state: "empty" },
+            { row: 4, col: 3, state: "empty" },
+            { row: 4, col: 4, state: "empty" },
+            { row: 4, col: 5, state: "empty" },
+          ],
+        });
+        setStatus("Loaded bundled example annotation.");
+      }
+
+      function buildPalette() {
+        dom.palette.innerHTML = "";
+        for (const entry of PALETTE_STATES) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.dataset.state = entry.id;
+          button.innerHTML = "<span class=\"swatch " + entry.id + "\"></span>" + entry.label + " <span class=\"mono\" style=\"margin-left:auto; color:var(--muted);\">" + entry.key + "</span>";
+          button.addEventListener("click", function () {
+            setActivePaint(entry.id);
+            setStatus("Paint mode set to " + entry.id + ".");
+          });
+          dom.palette.appendChild(button);
+        }
+        setActivePaint(state.activePaint);
+      }
+
+      function bindEvents() {
+        [
+          dom.nameInput,
+          dom.familyInput,
+          dom.attackerInput,
+          dom.targetEdgeInput,
+          dom.openLeftInput,
+          dom.openRightInput,
+          dom.showCoordsInput,
+          dom.notesInput,
+          dom.imageOpacityInput,
+          dom.imageScaleInput,
+          dom.rowsInput,
+          dom.colsInput,
+          dom.radiusInput,
+          dom.originXInput,
+          dom.originYInput,
+          dom.gridOpacityInput,
+        ].forEach((element) => {
+          const eventName = element.tagName === "TEXTAREA" || element.type === "text" ? "input" : "change";
+          element.addEventListener(eventName, render);
+          if (eventName !== "input") {
+            element.addEventListener("input", render);
+          }
+        });
+
+        dom.imageInput.addEventListener("change", function () {
+          const file = dom.imageInput.files && dom.imageInput.files[0];
+          loadImageFile(file);
+        });
+        dom.clearImageButton.addEventListener("click", clearImage);
+
+        dom.nudgeLeftButton.addEventListener("click", function () { nudgeGrid(-2, 0); });
+        dom.nudgeRightButton.addEventListener("click", function () { nudgeGrid(2, 0); });
+        dom.nudgeUpButton.addEventListener("click", function () { nudgeGrid(0, -2); });
+        dom.nudgeDownButton.addEventListener("click", function () { nudgeGrid(0, 2); });
+        dom.centerGridButton.addEventListener("click", function () {
+          state.annotation.grid.origin_x = 80;
+          state.annotation.grid.origin_y = 80;
+          loadFormFromState();
+          render();
+          setStatus("Reset grid origin to default.");
+        });
+
+        dom.clearCellsButton.addEventListener("click", function () {
+          state.annotation.cells = [];
+          render();
+          setStatus("Cleared all annotated cells.");
+        });
+        dom.loadExampleButton.addEventListener("click", loadExample);
+
+        dom.refreshJsonButton.addEventListener("click", function () {
+          refreshJsonOutput();
+          setStatus("Refreshed annotation JSON.");
+        });
+        dom.copyJsonButton.addEventListener("click", copyJson);
+        dom.downloadJsonButton.addEventListener("click", downloadJson);
+        dom.applyJsonButton.addEventListener("click", function () {
+          try {
+            const payload = readJsonFromTextarea();
+            applyAnnotationPayload(payload);
+            setStatus("Applied annotation JSON.");
+          } catch (error) {
+            setStatus("Failed to apply JSON: " + error.message);
+          }
+        });
+        dom.jsonFileInput.addEventListener("change", function () {
+          const file = dom.jsonFileInput.files && dom.jsonFileInput.files[0];
+          if (!file) {
+            return;
+          }
+          const reader = new FileReader();
+          reader.onload = function (event) {
+            try {
+              const payload = JSON.parse(String(event.target && event.target.result || ""));
+              applyAnnotationPayload(payload);
+              setStatus("Loaded JSON file " + file.name + ".");
+            } catch (error) {
+              setStatus("Failed to parse JSON file: " + error.message);
+            }
+          };
+          reader.readAsText(file);
+        });
+
+        dom.overlaySvg.addEventListener("click", function (event) {
+          const target = event.target.closest("g[data-row][data-col]");
+          if (!target) {
+            return;
+          }
+          const row = Number.parseInt(target.dataset.row, 10);
+          const col = Number.parseInt(target.dataset.col, 10);
+          paintCell(row, col, state.activePaint);
+          setStatus("Painted " + coordLabel(row, col) + " as " + state.activePaint + ".");
+        });
+
+        dom.overlaySvg.addEventListener("contextmenu", function (event) {
+          const target = event.target.closest("g[data-row][data-col]");
+          if (!target) {
+            return;
+          }
+          event.preventDefault();
+          const row = Number.parseInt(target.dataset.row, 10);
+          const col = Number.parseInt(target.dataset.col, 10);
+          paintCell(row, col, "ignored");
+          setStatus("Cleared " + coordLabel(row, col) + ".");
+        });
+
+        dom.overlaySvg.addEventListener("mousemove", function (event) {
+          const target = event.target.closest("g[data-row][data-col]");
+          const nextKey = target ? target.dataset.key : null;
+          if (nextKey === state.hoveredKey) {
+            return;
+          }
+          state.hoveredKey = nextKey;
+          if (target) {
+            const row = Number.parseInt(target.dataset.row, 10);
+            const col = Number.parseInt(target.dataset.col, 10);
+            const cells = getCellsMap();
+            const entry = cells.get(nextKey);
+            dom.hoverCoordInput.value = coordLabel(row, col) + (entry ? " [" + entry.state + "]" : "");
+          } else {
+            dom.hoverCoordInput.value = "-";
+          }
+          renderSvg();
+        });
+
+        dom.overlaySvg.addEventListener("mouseleave", function () {
+          state.hoveredKey = null;
+          dom.hoverCoordInput.value = "-";
+          renderSvg();
+        });
+
+        document.addEventListener("keydown", function (event) {
+          const target = event.target;
+          if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) {
+            return;
+          }
+          const paletteEntry = PALETTE_STATES.find((entry) => entry.key === event.key);
+          if (paletteEntry) {
+            setActivePaint(paletteEntry.id);
+            setStatus("Paint mode set to " + paletteEntry.id + ".");
+            return;
+          }
+          if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            nudgeGrid(-1, 0);
+          } else if (event.key === "ArrowRight") {
+            event.preventDefault();
+            nudgeGrid(1, 0);
+          } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            nudgeGrid(0, -1);
+          } else if (event.key === "ArrowDown") {
+            event.preventDefault();
+            nudgeGrid(0, 1);
+          }
+        });
+      }
+
+      buildPalette();
+      bindEvents();
+      loadFormFromState();
+      refreshJsonOutput();
+      render();
+    })();
+  </script>
+</body>
+</html>

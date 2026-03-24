@@ -285,7 +285,7 @@ MODEL_GENERATIONS: Dict[int, Dict[str, Any]] = {
     },
     65: {
         "dir": "hyperparameter_tuning/pipeline_20260323_061102/",
-        "models": ["epoch3_mini5.pt.gz"]
+        "models": ["epoch3_mini3.pt.gz", "epoch3_mini5.pt.gz"]
     },
 }
 
