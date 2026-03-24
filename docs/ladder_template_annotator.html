@@ -491,11 +491,11 @@
           <label>
             Target edge
             <select id="targetEdgeInput">
-              <option value="none">none</option>
               <option value="red_bottom">red_bottom</option>
               <option value="red_top">red_top</option>
               <option value="blue_left">blue_left</option>
               <option value="blue_right">blue_right</option>
+              <option value="none">none</option>
             </select>
           </label>
         </div>
@@ -526,8 +526,19 @@
             <input id="imageScaleInput" type="number" step="0.05" min="0.05" value="1" />
           </label>
         </div>
+        <div class="grid-2">
+          <label>
+            Image X
+            <input id="imageOffsetXInput" type="number" step="1" min="0" value="0" />
+          </label>
+          <label>
+            Image Y
+            <input id="imageOffsetYInput" type="number" step="1" min="0" value="0" />
+          </label>
+        </div>
         <div class="button-row">
           <button id="clearImageButton" type="button">Clear image</button>
+          <button id="placeImageBelowButton" type="button">Place below board</button>
         </div>
         <p class="hint">
           Use the source image as a guide only. The exported JSON stores the image name and current alignment
@@ -687,7 +698,10 @@
         imageInput: document.getElementById("imageInput"),
         imageOpacityInput: document.getElementById("imageOpacityInput"),
         imageScaleInput: document.getElementById("imageScaleInput"),
+        imageOffsetXInput: document.getElementById("imageOffsetXInput"),
+        imageOffsetYInput: document.getElementById("imageOffsetYInput"),
         clearImageButton: document.getElementById("clearImageButton"),
+        placeImageBelowButton: document.getElementById("placeImageBelowButton"),
         rowsInput: document.getElementById("rowsInput"),
         colsInput: document.getElementById("colsInput"),
         radiusInput: document.getElementById("radiusInput"),
@@ -736,7 +750,7 @@
             name: "",
             family: "",
             attacker: "red",
-            target_edge: "none",
+            target_edge: "red_bottom",
             open_left: false,
             open_right: false,
             notes: "",
@@ -756,6 +770,8 @@
             image_height: 0,
             image_opacity: 0.8,
             image_scale: 1,
+            image_offset_x: 0,
+            image_offset_y: 0,
           },
           cells: [],
         },
@@ -812,6 +828,19 @@
         return points;
       }
 
+      function hexVertices(centerX, centerY, radius) {
+        return hexPoints(centerX, centerY, radius).map(function (point) {
+          return { x: point[0], y: point[1] };
+        });
+      }
+
+      function edgeMidpoint(vertexA, vertexB) {
+        return {
+          x: (vertexA.x + vertexB.x) / 2,
+          y: (vertexA.y + vertexB.y) / 2,
+        };
+      }
+
       function coordLabel(row, col) {
         return "r" + row + " c" + col;
       }
@@ -831,8 +860,8 @@
         }
         const scaledImageWidth = state.image.width * state.annotation.image_overlay.image_scale;
         const scaledImageHeight = state.image.height * state.annotation.image_overlay.image_scale;
-        maxX = Math.max(maxX, scaledImageWidth);
-        maxY = Math.max(maxY, scaledImageHeight);
+        maxX = Math.max(maxX, state.annotation.image_overlay.image_offset_x + scaledImageWidth);
+        maxY = Math.max(maxY, state.annotation.image_overlay.image_offset_y + scaledImageHeight);
         return {
           width: Math.max(480, Math.ceil(maxX + radius * 2)),
           height: Math.max(360, Math.ceil(maxY + radius * 2)),
@@ -883,6 +912,8 @@
         dom.gridOpacityInput.value = state.annotation.grid.grid_opacity;
         dom.imageOpacityInput.value = state.annotation.image_overlay.image_opacity;
         dom.imageScaleInput.value = state.annotation.image_overlay.image_scale;
+        dom.imageOffsetXInput.value = state.annotation.image_overlay.image_offset_x;
+        dom.imageOffsetYInput.value = state.annotation.image_overlay.image_offset_y;
       }
 
       function syncStateFromForm() {
@@ -902,6 +933,8 @@
         state.annotation.grid.grid_opacity = clamp(Number.parseFloat(dom.gridOpacityInput.value), 0, 1, 1);
         state.annotation.image_overlay.image_opacity = clamp(Number.parseFloat(dom.imageOpacityInput.value), 0, 1, 1);
         state.annotation.image_overlay.image_scale = Math.max(0.05, Number.parseFloat(dom.imageScaleInput.value) || 1);
+        state.annotation.image_overlay.image_offset_x = Math.max(0, Number.parseFloat(dom.imageOffsetXInput.value) || 0);
+        state.annotation.image_overlay.image_offset_y = Math.max(0, Number.parseFloat(dom.imageOffsetYInput.value) || 0);
         state.annotation.image_overlay.image_name = state.image.name || "";
         state.annotation.image_overlay.image_width = state.image.width || 0;
         state.annotation.image_overlay.image_height = state.image.height || 0;
@@ -965,6 +998,8 @@
 
         dom.sourceImage.style.opacity = String(state.annotation.image_overlay.image_opacity);
         dom.sourceImage.style.transform = "scale(" + state.annotation.image_overlay.image_scale + ")";
+        dom.sourceImage.style.left = state.annotation.image_overlay.image_offset_x + "px";
+        dom.sourceImage.style.top = state.annotation.image_overlay.image_offset_y + "px";
         dom.sourceImage.style.display = state.image.src ? "block" : "none";
         if (state.image.src) {
           dom.sourceImage.src = state.image.src;
@@ -989,6 +1024,70 @@
         const radius = state.annotation.grid.radius;
         const rows = state.annotation.grid.rows;
         const cols = state.annotation.grid.cols;
+
+        if (rows > 0 && cols > 0) {
+          const topLeft = hexCenter(0, 0, radius);
+          const topRight = hexCenter(0, cols - 1, radius);
+          const bottomLeft = hexCenter(rows - 1, 0, radius);
+          const bottomRight = hexCenter(rows - 1, cols - 1, radius);
+          const targetEdge = state.annotation.metadata.target_edge;
+          let edgeSpec = null;
+
+          if (targetEdge === "red_bottom") {
+            edgeSpec = {
+              color: "#f23b2d",
+              x1: bottomLeft.x,
+              y1: bottomLeft.y + radius,
+              x2: bottomRight.x,
+              y2: bottomRight.y + radius,
+            };
+          } else if (targetEdge === "red_top") {
+            edgeSpec = {
+              color: "#f23b2d",
+              x1: topLeft.x,
+              y1: topLeft.y - radius,
+              x2: topRight.x,
+              y2: topRight.y - radius,
+            };
+          } else if (targetEdge === "blue_left") {
+            const topVertices = hexVertices(topLeft.x, topLeft.y, radius);
+            const bottomVertices = hexVertices(bottomLeft.x, bottomLeft.y, radius);
+            const start = edgeMidpoint(topVertices[2], topVertices[3]);
+            const end = edgeMidpoint(bottomVertices[2], bottomVertices[3]);
+            edgeSpec = {
+              color: "#2c7ac4",
+              x1: start.x,
+              y1: start.y,
+              x2: end.x,
+              y2: end.y,
+            };
+          } else if (targetEdge === "blue_right") {
+            const topVertices = hexVertices(topRight.x, topRight.y, radius);
+            const bottomVertices = hexVertices(bottomRight.x, bottomRight.y, radius);
+            const start = edgeMidpoint(topVertices[0], topVertices[5]);
+            const end = edgeMidpoint(bottomVertices[0], bottomVertices[5]);
+            edgeSpec = {
+              color: "#2c7ac4",
+              x1: start.x,
+              y1: start.y,
+              x2: end.x,
+              y2: end.y,
+            };
+          }
+
+          if (edgeSpec) {
+            const edgeLine = document.createElementNS(SVG_NS, "line");
+            edgeLine.setAttribute("x1", String(edgeSpec.x1));
+            edgeLine.setAttribute("y1", String(edgeSpec.y1));
+            edgeLine.setAttribute("x2", String(edgeSpec.x2));
+            edgeLine.setAttribute("y2", String(edgeSpec.y2));
+            edgeLine.setAttribute("stroke", edgeSpec.color);
+            edgeLine.setAttribute("stroke-width", String(Math.max(10, radius * 0.42)));
+            edgeLine.setAttribute("stroke-linecap", "round");
+            edgeLine.setAttribute("opacity", "0.7");
+            dom.overlaySvg.appendChild(edgeLine);
+          }
+        }
 
         for (let row = 0; row < rows; row += 1) {
           for (let col = 0; col < cols; col += 1) {
@@ -1077,7 +1176,7 @@
           name: payload.metadata && typeof payload.metadata.name === "string" ? payload.metadata.name : "",
           family: payload.metadata && typeof payload.metadata.family === "string" ? payload.metadata.family : "",
           attacker: payload.metadata && payload.metadata.attacker === "blue" ? "blue" : "red",
-          target_edge: payload.metadata && typeof payload.metadata.target_edge === "string" ? payload.metadata.target_edge : "none",
+          target_edge: payload.metadata && typeof payload.metadata.target_edge === "string" ? payload.metadata.target_edge : "red_bottom",
           open_left: !!(payload.metadata && payload.metadata.open_left),
           open_right: !!(payload.metadata && payload.metadata.open_right),
           notes: payload.metadata && typeof payload.metadata.notes === "string" ? payload.metadata.notes : "",
@@ -1097,6 +1196,8 @@
           image_height: Number.parseFloat(payload.image_overlay && payload.image_overlay.image_height) || 0,
           image_opacity: clamp(Number.parseFloat(payload.image_overlay && payload.image_overlay.image_opacity), 0, 1, 0.8),
           image_scale: Math.max(0.05, Number.parseFloat(payload.image_overlay && payload.image_overlay.image_scale) || 1),
+          image_offset_x: Math.max(0, Number.parseFloat(payload.image_overlay && payload.image_overlay.image_offset_x) || 0),
+          image_offset_y: Math.max(0, Number.parseFloat(payload.image_overlay && payload.image_overlay.image_offset_y) || 0),
         };
         next.cells = Array.isArray(payload.cells)
           ? payload.cells
@@ -1148,9 +1249,20 @@
         state.annotation.image_overlay.image_name = "";
         state.annotation.image_overlay.image_width = 0;
         state.annotation.image_overlay.image_height = 0;
+        state.annotation.image_overlay.image_offset_x = 0;
+        state.annotation.image_overlay.image_offset_y = 0;
         dom.imageInput.value = "";
         render();
         setStatus("Cleared source image.");
+      }
+
+      function placeImageBelowBoard() {
+        const bounds = computeStageBounds();
+        state.annotation.image_overlay.image_offset_x = 0;
+        state.annotation.image_overlay.image_offset_y = Math.ceil(bounds.height + 20);
+        loadFormFromState();
+        render();
+        setStatus("Moved source image below the board area.");
       }
 
       function nudgeGrid(dx, dy) {
@@ -1212,6 +1324,8 @@
             image_height: 0,
             image_opacity: 0.8,
             image_scale: 1,
+            image_offset_x: 0,
+            image_offset_y: 0,
           },
           cells: [
             { row: 0, col: 1, state: "red" },
@@ -1269,6 +1383,8 @@
           dom.notesInput,
           dom.imageOpacityInput,
           dom.imageScaleInput,
+          dom.imageOffsetXInput,
+          dom.imageOffsetYInput,
           dom.rowsInput,
           dom.colsInput,
           dom.radiusInput,
@@ -1288,6 +1404,7 @@
           loadImageFile(file);
         });
         dom.clearImageButton.addEventListener("click", clearImage);
+        dom.placeImageBelowButton.addEventListener("click", placeImageBelowBoard);
 
         dom.nudgeLeftButton.addEventListener("click", function () { nudgeGrid(-2, 0); });
         dom.nudgeRightButton.addEventListener("click", function () { nudgeGrid(2, 0); });
