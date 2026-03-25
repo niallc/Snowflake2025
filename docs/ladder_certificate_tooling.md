@@ -287,6 +287,41 @@ python scripts/backfill_ladder_certificate_sidecars.py \
   --max-files 10
 ```
 
+## Sanity-check viewer
+
+For local inspection there is now a lightweight viewer server:
+
+- `scripts/serve_ladder_certificate_viewer.py`
+
+It serves:
+
+- file browsing over `.trmph` trees
+- per-file game summaries
+- per-position board rendering
+- dense ladder-plane overlays from stored sidecars when present
+- live per-match role overlays, including:
+  - carrier cells
+  - template origins
+  - attacker-required cells
+  - defender-required cells
+  - boundary metadata cells
+  - attacker-superset cells
+
+Example:
+
+```bash
+source hex_ai_env/bin/activate
+python scripts/serve_ladder_certificate_viewer.py --port 8765
+```
+
+Then open:
+
+- `http://127.0.0.1:8765/`
+
+The viewer uses stored sidecar dense labels when available and also reports
+whether those dense labels agree with a live recomputation for the currently
+displayed position.
+
 ## On-demand targets vs pre-generated targets
 
 There are two distinct integration choices:

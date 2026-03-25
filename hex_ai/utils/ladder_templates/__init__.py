@@ -60,6 +60,13 @@ from .sidecar import (
     load_ladder_certificate_sidecar,
     write_ladder_certificate_sidecar,
 )
+from .viewer_data import (
+    ViewerGameEntry,
+    build_ladder_certificate_file_summary,
+    build_ladder_certificate_viewer_game_payload,
+    extract_viewer_game_entries,
+    list_trmph_files_under_root,
+)
 from .prefill_geometry import (
     DetectedImageCell,
     InferredGridGeometry,
@@ -88,6 +95,9 @@ __all__ = [
     "LadderTemplateMatch",
     "LoadedLadderTemplate",
     "MaterializedLadderTemplate",
+    "ViewerGameEntry",
+    "build_ladder_certificate_file_summary",
+    "build_ladder_certificate_viewer_game_payload",
     "build_ladder_certificate_labels",
     "build_ladder_certificate_label_sequence_for_trmph_game",
     "build_ladder_certificate_sidecar_record_for_trmph_game",
@@ -98,6 +108,7 @@ __all__ = [
     "decode_ladder_certificate_maps_blob",
     "default_hexwiki_generated_library_dir",
     "encode_ladder_certificate_maps_blob",
+    "extract_viewer_game_entries",
     "extract_trmph_games_for_ladder_sidecar",
     "find_ladder_template_matches",
     "find_ladder_matches_for_training_example",
@@ -113,6 +124,7 @@ __all__ = [
     "load_hexwiki_generated_ladder_templates",
     "load_ladder_template_library",
     "load_ladder_template_annotation",
+    "list_trmph_files_under_root",
     "materialize_ladder_template",
     "normalize_board_for_ladder_matching",
     "resolve_last_move_for_training_example",

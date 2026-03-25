@@ -1,0 +1,1156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ladder Certificate Viewer</title>
+  <style>
+    :root {
+      --bg: #efe6d7;
+      --panel: rgba(255, 251, 244, 0.92);
+      --panel-strong: #fffdf8;
+      --ink: #201a16;
+      --muted: #6c6258;
+      --line: #d4c8b8;
+      --accent: #235d52;
+      --accent-soft: #dcebe5;
+      --blue: #2d6ea8;
+      --red: #c4583d;
+      --empty: #f5efe5;
+      --carrier: rgba(232, 185, 96, 0.34);
+      --carrier-stroke: rgba(180, 122, 34, 0.72);
+      --origin: #f2c14e;
+      --origin-stroke: #7f5e11;
+      --boundary: #1f1b16;
+      --shadow: 0 18px 38px rgba(47, 34, 23, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top left, #fffaf2 0%, #f5eee2 25%, var(--bg) 68%);
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 360px minmax(0, 1fr);
+      gap: 18px;
+      min-height: 100vh;
+      padding: 18px;
+    }
+
+    .sidebar,
+    .board-panel,
+    .match-panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+
+    .sidebar {
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      overflow: auto;
+    }
+
+    .main {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) 260px;
+      gap: 18px;
+      min-height: 0;
+    }
+
+    .board-panel {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 320px;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .board-wrap {
+      min-height: 0;
+      padding: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background:
+        radial-gradient(circle at 20% 20%, #fffdfa 0%, #f7f1e6 40%, #efe3d1 100%);
+      border-right: 1px solid var(--line);
+    }
+
+    #boardSvg {
+      width: 100%;
+      height: 100%;
+      max-height: calc(100vh - 110px);
+    }
+
+    .detail-pane,
+    .match-panel {
+      padding: 18px;
+      overflow: auto;
+    }
+
+    .match-panel {
+      display: grid;
+      grid-template-columns: 1.4fr 1fr;
+      gap: 18px;
+    }
+
+    .title {
+      margin: 0;
+      font-size: 1.34rem;
+      color: var(--accent);
+      letter-spacing: 0.015em;
+    }
+
+    .subtitle,
+    .small,
+    .status-line {
+      color: var(--muted);
+      line-height: 1.45;
+      font-size: 0.9rem;
+    }
+
+    .subtitle {
+      margin: 0;
+    }
+
+    .section {
+      display: grid;
+      gap: 10px;
+      border-top: 1px solid var(--line);
+      padding-top: 14px;
+    }
+
+    .section:first-of-type {
+      border-top: 0;
+      padding-top: 0;
+    }
+
+    .section-title {
+      margin: 0;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 0.92rem;
+    }
+
+    input,
+    select,
+    button {
+      font: inherit;
+    }
+
+    input,
+    select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 9px 11px;
+      background: rgba(255,255,255,0.9);
+      color: var(--ink);
+    }
+
+    button {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 9px 12px;
+      background: rgba(255,255,255,0.95);
+      color: var(--ink);
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #fffdf9;
+      border-color: #b8a995;
+    }
+
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .row > * {
+      flex: 1 1 auto;
+    }
+
+    .row.compact > *:first-child,
+    .row.compact > *:last-child {
+      flex: 0 0 auto;
+    }
+
+    .file-list,
+    .summary-list,
+    .match-list {
+      display: grid;
+      gap: 8px;
+      min-height: 0;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .file-item,
+    .game-item,
+    .match-item {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.82);
+      cursor: pointer;
+    }
+
+    .file-item.active,
+    .game-item.active,
+    .match-item.active {
+      background: var(--accent-soft);
+      border-color: #89ab9c;
+    }
+
+    .match-item {
+      cursor: pointer;
+    }
+
+    .badge-row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(35, 93, 82, 0.08);
+      color: var(--accent);
+      font-size: 0.76rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .badge.warn {
+      background: rgba(190, 72, 46, 0.12);
+      color: #a33c23;
+    }
+
+    .badge.cool {
+      background: rgba(45, 110, 168, 0.12);
+      color: #1c527f;
+    }
+
+    .toggle-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .toggle {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      font-size: 0.88rem;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 11px 12px;
+      background: rgba(255,255,255,0.88);
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+
+    .metric .value {
+      margin-top: 5px;
+      font-size: 1.15rem;
+      font-weight: 700;
+    }
+
+    .legend-list {
+      display: grid;
+      gap: 6px;
+      font-size: 0.88rem;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(32, 26, 22, 0.2);
+      display: inline-block;
+    }
+
+    .swatch.empty { background: var(--empty); }
+    .swatch.blue { background: var(--blue); }
+    .swatch.red { background: var(--red); }
+    .swatch.origin { background: var(--origin); }
+    .swatch.carrier { background: rgba(232, 185, 96, 0.75); }
+    .swatch.boundary { background: var(--boundary); }
+    .swatch.superset { background: linear-gradient(135deg, var(--origin), rgba(255,255,255,0.95)); }
+
+    .mono {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.82rem;
+    }
+
+    .selected-summary,
+    .selected-match {
+      display: grid;
+      gap: 10px;
+    }
+
+    .message {
+      border: 1px dashed var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      color: var(--muted);
+      background: rgba(255,255,255,0.45);
+    }
+
+    @media (max-width: 1200px) {
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .main {
+        grid-template-rows: auto auto;
+      }
+
+      .board-panel {
+        grid-template-columns: 1fr;
+      }
+
+      .board-wrap {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+        min-height: 520px;
+      }
+
+      .match-panel {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="section">
+        <h1 class="title">Ladder Certificate Viewer</h1>
+        <p class="subtitle">Browse `.trmph` games, inspect stored dense ladder labels, and highlight per-match role cells on the board.</p>
+      </div>
+
+      <div class="section">
+        <h2 class="section-title">File Browser</h2>
+        <label>
+          Root Directory
+          <input id="rootInput" value="data" />
+        </label>
+        <div class="row compact">
+          <button id="listFilesBtn" class="primary">List `.trmph` Files</button>
+          <button id="reloadSummaryBtn">Reload Selected File</button>
+        </div>
+        <div class="file-list" id="fileList"></div>
+      </div>
+
+      <div class="section">
+        <h2 class="section-title">Selected File</h2>
+        <label>
+          TRMPH File Path
+          <input id="pathInput" placeholder="data/sf25/.../games.trmph" />
+        </label>
+        <label class="toggle">
+          <input type="checkbox" id="includeWinnerlessToggle" />
+          Include winnerless parseable lines
+        </label>
+        <div class="small" id="fileMeta">No file loaded.</div>
+        <div class="summary-list" id="gameList"></div>
+      </div>
+
+      <div class="section">
+        <h2 class="section-title">Navigation</h2>
+        <div class="row compact">
+          <button id="prevGameBtn">Prev Game</button>
+          <select id="gameSelect"></select>
+          <button id="nextGameBtn">Next Game</button>
+        </div>
+        <div class="row compact">
+          <button id="prevPositionBtn">Prev Pos</button>
+          <input id="positionSlider" type="range" min="0" max="0" value="0" />
+          <button id="nextPositionBtn">Next Pos</button>
+        </div>
+        <div class="small" id="positionMeta">Position 0</div>
+      </div>
+
+      <div class="section">
+        <h2 class="section-title">Overlays</h2>
+        <label>
+          Dense Plane Overlay
+          <select id="planeSelect"></select>
+        </label>
+        <label>
+          Match Focus
+          <select id="matchSelect"></select>
+        </label>
+        <div class="toggle-grid">
+          <label class="toggle"><input type="checkbox" id="showPlaneCarrierToggle" checked /> Plane carrier</label>
+          <label class="toggle"><input type="checkbox" id="showPlaneOriginToggle" checked /> Plane origin</label>
+          <label class="toggle"><input type="checkbox" id="showRoleOverlayToggle" checked /> Match roles</label>
+          <label class="toggle"><input type="checkbox" id="showCoordsToggle" /> Coords</label>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2 class="section-title">Legend</h2>
+        <div class="legend-list">
+          <div class="legend-item"><span class="swatch empty"></span>Empty board cell</div>
+          <div class="legend-item"><span class="swatch blue"></span>Blue stone</div>
+          <div class="legend-item"><span class="swatch red"></span>Red stone</div>
+          <div class="legend-item"><span class="swatch carrier"></span>Carrier / selected dense carrier</div>
+          <div class="legend-item"><span class="swatch origin"></span>Template origin</div>
+          <div class="legend-item"><span class="swatch boundary"></span>Boundary metadata cell</div>
+          <div class="legend-item"><span class="swatch superset"></span>`empty` accepted as attacker-superset</div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <section class="board-panel">
+        <div class="board-wrap">
+          <svg id="boardSvg" viewBox="0 0 1200 900" role="img" aria-label="Ladder certificate board viewer"></svg>
+        </div>
+        <div class="detail-pane">
+          <div class="selected-summary">
+            <h2 class="title" style="font-size:1.1rem;">Position Summary</h2>
+            <div class="metric-grid" id="metricGrid"></div>
+            <div id="consistencyBadges" class="badge-row"></div>
+            <div id="selectedPositionDetails" class="small"></div>
+            <div class="section" style="padding-top:12px;">
+              <h2 class="section-title">Selected Match</h2>
+              <div id="selectedMatch" class="selected-match"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="match-panel">
+        <div>
+          <h2 class="title" style="font-size:1.1rem;">Matches</h2>
+          <p class="subtitle">Click a match to isolate its roles. “All matches” keeps the union.</p>
+          <div class="match-list" id="matchList"></div>
+        </div>
+        <div>
+          <h2 class="title" style="font-size:1.1rem;">Status</h2>
+          <div id="statusBox" class="message">Load a `.trmph` file to begin.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const LETTERS = "abcdefghijklmnopqrstuvwxyz";
+    const PLANE_NONE = "__none__";
+    const MATCH_ALL = "__all__";
+
+    const state = {
+      fileList: [],
+      selectedPath: "",
+      summary: null,
+      game: null,
+      currentPosition: 0,
+      selectedPlane: PLANE_NONE,
+      selectedMatch: MATCH_ALL,
+    };
+
+    const els = {
+      rootInput: document.getElementById("rootInput"),
+      pathInput: document.getElementById("pathInput"),
+      includeWinnerlessToggle: document.getElementById("includeWinnerlessToggle"),
+      fileList: document.getElementById("fileList"),
+      fileMeta: document.getElementById("fileMeta"),
+      gameList: document.getElementById("gameList"),
+      gameSelect: document.getElementById("gameSelect"),
+      positionSlider: document.getElementById("positionSlider"),
+      positionMeta: document.getElementById("positionMeta"),
+      planeSelect: document.getElementById("planeSelect"),
+      matchSelect: document.getElementById("matchSelect"),
+      showPlaneCarrierToggle: document.getElementById("showPlaneCarrierToggle"),
+      showPlaneOriginToggle: document.getElementById("showPlaneOriginToggle"),
+      showRoleOverlayToggle: document.getElementById("showRoleOverlayToggle"),
+      showCoordsToggle: document.getElementById("showCoordsToggle"),
+      boardSvg: document.getElementById("boardSvg"),
+      metricGrid: document.getElementById("metricGrid"),
+      selectedPositionDetails: document.getElementById("selectedPositionDetails"),
+      selectedMatch: document.getElementById("selectedMatch"),
+      matchList: document.getElementById("matchList"),
+      statusBox: document.getElementById("statusBox"),
+      consistencyBadges: document.getElementById("consistencyBadges"),
+    };
+
+    function planeColor(planeName) {
+      if (!planeName || planeName === PLANE_NONE) return "#999999";
+      const isBlue = planeName.startsWith("blue_right");
+      if (planeName.includes("row2")) return isBlue ? "#3f7ec9" : "#c76441";
+      if (planeName.includes("row3")) return isBlue ? "#4ba7d8" : "#d9853b";
+      if (planeName.includes("row4")) return isBlue ? "#58bed0" : "#e1b14e";
+      return isBlue ? "#7092bf" : "#b97b62";
+    }
+
+    function coordKey(coord) {
+      return coord ? `${coord[0]},${coord[1]}` : "";
+    }
+
+    function coordLabel(coord) {
+      if (!coord) return "none";
+      return `${LETTERS[coord[1]]}${coord[0] + 1}`;
+    }
+
+    function htmlEscape(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    async function apiJson(url) {
+      const response = await fetch(url);
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || `Request failed: ${response.status}`);
+      }
+      return payload;
+    }
+
+    function setStatus(message, isError = false) {
+      els.statusBox.className = isError ? "message mono" : "message";
+      els.statusBox.textContent = message;
+    }
+
+    async function loadFileList() {
+      const root = els.rootInput.value.trim() || "data";
+      setStatus(`Listing .trmph files under ${root}...`);
+      try {
+        const payload = await apiJson(`/api/list-trmph?root=${encodeURIComponent(root)}`);
+        state.fileList = payload.files;
+        renderFileList();
+        setStatus(`Found ${payload.total_found} .trmph files under ${payload.root}.`);
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    }
+
+    async function loadSummary(path) {
+      if (!path) return;
+      const includeWinnerless = els.includeWinnerlessToggle.checked ? "1" : "0";
+      state.selectedPath = path;
+      els.pathInput.value = path;
+      setStatus(`Loading summary for ${path}...`);
+      try {
+        const payload = await apiJson(
+          `/api/file-summary?path=${encodeURIComponent(path)}&include_winnerless=${includeWinnerless}`
+        );
+        state.summary = payload;
+        renderSummary();
+        if (payload.games.length > 0) {
+          await loadGame(0);
+        } else {
+          state.game = null;
+          renderGame();
+          setStatus(`No eligible games found in ${path}.`);
+        }
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    }
+
+    async function loadGame(gameIndex) {
+      if (!state.selectedPath) return;
+      const includeWinnerless = els.includeWinnerlessToggle.checked ? "1" : "0";
+      setStatus(`Loading game ${gameIndex} from ${state.selectedPath}...`);
+      try {
+        const payload = await apiJson(
+          `/api/game-data?path=${encodeURIComponent(state.selectedPath)}&game_index=${gameIndex}&include_winnerless=${includeWinnerless}`
+        );
+        state.game = payload;
+        state.currentPosition = 0;
+        state.selectedMatch = MATCH_ALL;
+        renderGame();
+        setStatus(`Loaded game ${payload.game_index} with ${payload.move_count} moves.`);
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    }
+
+    function renderFileList() {
+      const selected = state.selectedPath;
+      els.fileList.innerHTML = "";
+      if (state.fileList.length === 0) {
+        els.fileList.innerHTML = `<div class="message">No files listed yet.</div>`;
+        return;
+      }
+      for (const file of state.fileList) {
+        const item = document.createElement("button");
+        item.className = `file-item ${selected === file.path ? "active" : ""}`;
+        item.innerHTML = `
+          <div><strong>${htmlEscape(file.relative_path)}</strong></div>
+          <div class="small mono">${htmlEscape(file.path)}</div>
+        `;
+        item.addEventListener("click", () => loadSummary(file.path));
+        els.fileList.appendChild(item);
+      }
+    }
+
+    function renderSummary() {
+      const summary = state.summary;
+      renderFileList();
+      if (!summary) {
+        els.fileMeta.textContent = "No file loaded.";
+        els.gameList.innerHTML = "";
+        els.gameSelect.innerHTML = "";
+        return;
+      }
+
+      els.fileMeta.innerHTML = `
+        <div><strong>${htmlEscape(summary.file_path)}</strong></div>
+        <div class="small mono">sidecar: ${htmlEscape(summary.sidecar_path)}</div>
+        <div class="badge-row" style="margin-top:6px;">
+          <span class="badge">${summary.eligible_game_count} games</span>
+          <span class="badge ${summary.sidecar_present ? "" : "warn"}">${summary.sidecar_present ? "sidecar present" : "no sidecar"}</span>
+          <span class="badge ${summary.sidecar_aligned ? "" : "warn"}">${summary.sidecar_aligned ? "aligned" : "sidecar mismatch"}</span>
+        </div>
+      `;
+
+      els.gameList.innerHTML = "";
+      els.gameSelect.innerHTML = "";
+      for (const game of summary.games) {
+        const option = document.createElement("option");
+        option.value = String(game.game_index);
+        option.textContent = `Game ${game.game_index} (${game.move_count} moves${game.winner ? `, ${game.winner}` : ""})`;
+        els.gameSelect.appendChild(option);
+
+        const item = document.createElement("button");
+        item.className = `game-item ${state.game && game.game_index === state.game.game_index ? "active" : ""}`;
+        item.innerHTML = `
+          <div><strong>Game ${game.game_index}</strong> <span class="small">${game.winner || "winnerless"}</span></div>
+          <div class="small mono">${htmlEscape(game.preview_moves.join(" "))}</div>
+          <div class="badge-row" style="margin-top:6px;">
+            <span class="badge">${game.move_count} moves</span>
+            ${game.positions_with_any_match != null ? `<span class="badge cool">${game.positions_with_any_match} positions w/ match</span>` : ""}
+            ${game.max_active_matches != null ? `<span class="badge">max ${game.max_active_matches} active</span>` : ""}
+          </div>
+        `;
+        item.addEventListener("click", () => loadGame(game.game_index));
+        els.gameList.appendChild(item);
+      }
+    }
+
+    function renderGame() {
+      const game = state.game;
+      if (!game) {
+        els.positionMeta.textContent = "No position loaded.";
+        els.metricGrid.innerHTML = "";
+        els.selectedPositionDetails.innerHTML = "";
+        els.matchList.innerHTML = `<div class="message">No game loaded.</div>`;
+        els.selectedMatch.innerHTML = `<div class="small">No match selected.</div>`;
+        els.consistencyBadges.innerHTML = "";
+        els.planeSelect.innerHTML = `<option value="${PLANE_NONE}">No plane overlay</option>`;
+        els.matchSelect.innerHTML = `<option value="${MATCH_ALL}">All matches</option>`;
+        renderBoard();
+        return;
+      }
+
+      els.gameSelect.value = String(game.game_index);
+      els.positionSlider.max = String(Math.max(game.positions.length - 1, 0));
+      els.positionSlider.value = String(state.currentPosition);
+
+      const previousPlane = state.selectedPlane;
+      els.planeSelect.innerHTML = `<option value="${PLANE_NONE}">No plane overlay</option>`;
+      for (const planeName of game.plane_names) {
+        const option = document.createElement("option");
+        option.value = planeName;
+        option.textContent = planeName.replace("_template_origin", "");
+        els.planeSelect.appendChild(option);
+      }
+      state.selectedPlane = game.plane_names.includes(previousPlane) ? previousPlane : PLANE_NONE;
+      els.planeSelect.value = state.selectedPlane;
+
+      renderCurrentPosition();
+      renderSummary();
+    }
+
+    function currentPosition() {
+      if (!state.game) return null;
+      return state.game.positions[state.currentPosition] || null;
+    }
+
+    function renderCurrentPosition() {
+      const game = state.game;
+      const position = currentPosition();
+      if (!game || !position) {
+        renderBoard();
+        return;
+      }
+
+      els.positionSlider.value = String(state.currentPosition);
+      els.positionMeta.innerHTML = `
+        Position ${state.currentPosition} / ${game.positions.length - 1}
+        <span class="small"> last move: ${position.last_move ? coordLabel(position.last_move) : "none"}</span>
+      `;
+
+      const metrics = [
+        { label: "Move index", value: position.position_in_game },
+        { label: "Player to move", value: position.player_to_move },
+        { label: "Matches", value: position.matches.length },
+        { label: "Embeddings", value: position.stats.embeddings_considered },
+        { label: "Matcher ms", value: position.stats.elapsed_ms.toFixed(2) },
+        { label: "Stones", value: position.stone_count },
+      ];
+      els.metricGrid.innerHTML = metrics.map(metric => `
+        <div class="metric">
+          <div class="label">${htmlEscape(metric.label)}</div>
+          <div class="value">${htmlEscape(metric.value)}</div>
+        </div>
+      `).join("");
+
+      els.selectedPositionDetails.innerHTML = `
+        <div><strong>Game ${game.game_index}</strong> line ${game.line_index}${game.winner ? `, winner ${htmlEscape(game.winner)}` : ""}</div>
+        <div class="mono">${htmlEscape(game.trmph_text)}</div>
+      `;
+
+      els.consistencyBadges.innerHTML = `
+        <span class="badge ${position.sidecar_consistency.using_sidecar_dense_labels ? "" : "warn"}">
+          ${position.sidecar_consistency.using_sidecar_dense_labels ? "displaying stored dense labels" : "displaying live dense labels"}
+        </span>
+        <span class="badge ${position.sidecar_consistency.template_origin_equal_to_live ? "" : "warn"}">
+          ${position.sidecar_consistency.template_origin_equal_to_live ? "origin matches live" : "origin differs from live"}
+        </span>
+        <span class="badge ${position.sidecar_consistency.carrier_equal_to_live ? "" : "warn"}">
+          ${position.sidecar_consistency.carrier_equal_to_live ? "carrier matches live" : "carrier differs from live"}
+        </span>
+      `;
+
+      els.matchSelect.innerHTML = `<option value="${MATCH_ALL}">All matches</option>`;
+      position.matches.forEach((match, index) => {
+        const option = document.createElement("option");
+        option.value = String(index);
+        option.textContent = `${match.orientation} row${match.row_class} :: ${match.template_id}`;
+        els.matchSelect.appendChild(option);
+      });
+      if (
+        state.selectedMatch !== MATCH_ALL &&
+        Number.isInteger(Number(state.selectedMatch)) &&
+        Number(state.selectedMatch) < position.matches.length
+      ) {
+        els.matchSelect.value = String(state.selectedMatch);
+      } else {
+        state.selectedMatch = MATCH_ALL;
+        els.matchSelect.value = MATCH_ALL;
+      }
+
+      renderMatchList(position);
+      renderSelectedMatch(position);
+      renderBoard();
+    }
+
+    function renderMatchList(position) {
+      if (!position || position.matches.length === 0) {
+        els.matchList.innerHTML = `<div class="message">No active matches on this position.</div>`;
+        return;
+      }
+      els.matchList.innerHTML = "";
+      position.matches.forEach((match, index) => {
+        const item = document.createElement("button");
+        const active = String(state.selectedMatch) === String(index);
+        item.className = `match-item ${active ? "active" : ""}`;
+        item.innerHTML = `
+          <div><strong>${htmlEscape(match.orientation)}</strong> row${match.row_class}</div>
+          <div class="small">${htmlEscape(match.template_id)}</div>
+          <div class="badge-row" style="margin-top:6px;">
+            <span class="badge">origin ${coordLabel(match.template_origin)}</span>
+            <span class="badge">carrier ${match.carrier_cells.length}</span>
+            ${match.attacker_superset_cells.length ? `<span class="badge warn">attacker-superset ${match.attacker_superset_cells.length}</span>` : ""}
+          </div>
+          <div class="small mono" style="margin-top:6px;">${htmlEscape(match.source_path)}</div>
+        `;
+        item.addEventListener("click", () => {
+          state.selectedMatch = String(index);
+          renderCurrentPosition();
+        });
+        els.matchList.appendChild(item);
+      });
+    }
+
+    function renderSelectedMatch(position) {
+      if (!position) {
+        els.selectedMatch.innerHTML = `<div class="small">No position loaded.</div>`;
+        return;
+      }
+      if (state.selectedMatch === MATCH_ALL) {
+        els.selectedMatch.innerHTML = `
+          <div class="small">Showing the union of all ${position.matches.length} active matches.</div>
+        `;
+        return;
+      }
+      const index = Number(state.selectedMatch);
+      const match = position.matches[index];
+      if (!match) {
+        els.selectedMatch.innerHTML = `<div class="small">Selected match is unavailable on this position.</div>`;
+        return;
+      }
+      els.selectedMatch.innerHTML = `
+        <div><strong>${htmlEscape(match.template_id)}</strong></div>
+        <div class="badge-row">
+          <span class="badge">${htmlEscape(match.orientation)}</span>
+          <span class="badge">row${match.row_class}</span>
+          <span class="badge">origin ${coordLabel(match.template_origin)}</span>
+        </div>
+        <div class="small">carrier: ${match.carrier_cells.map(coordLabel).join(", ") || "none"}</div>
+        <div class="small">attacker required: ${match.attacker_required_cells.map(coordLabel).join(", ") || "none"}</div>
+        <div class="small">defender required: ${match.defender_required_cells.map(coordLabel).join(", ") || "none"}</div>
+        <div class="small">boundary cells: ${match.boundary_cells.map(coordLabel).join(", ") || "none"}</div>
+        <div class="small">attacker-superset cells: ${match.attacker_superset_cells.map(coordLabel).join(", ") || "none"}</div>
+      `;
+    }
+
+    function buildOverlayState(position) {
+      const plane = position.plane_labels.find(label => label.plane_name === state.selectedPlane);
+      const planeCarrier = new Set((plane ? plane.carrier_cells : []).map(coordKey));
+      const planeOrigin = new Set((plane ? plane.origin_cells : []).map(coordKey));
+
+      const selectedMatches = state.selectedMatch === MATCH_ALL
+        ? position.matches
+        : [position.matches[Number(state.selectedMatch)]].filter(Boolean);
+
+      const roleSets = {
+        carrier: new Set(),
+        origin: new Set(),
+        attackerRequired: new Set(),
+        defenderRequired: new Set(),
+        boundary: new Set(),
+        attackerSuperset: new Set(),
+      };
+
+      const perCellRoles = new Map();
+      const addRole = (coord, role) => {
+        const key = coordKey(coord);
+        if (!key) return;
+        if (!perCellRoles.has(key)) perCellRoles.set(key, new Set());
+        perCellRoles.get(key).add(role);
+      };
+
+      selectedMatches.forEach(match => {
+        match.carrier_cells.forEach(coord => {
+          roleSets.carrier.add(coordKey(coord));
+          addRole(coord, "carrier");
+        });
+        roleSets.origin.add(coordKey(match.template_origin));
+        addRole(match.template_origin, "template origin");
+        match.attacker_required_cells.forEach(coord => {
+          roleSets.attackerRequired.add(coordKey(coord));
+          addRole(coord, "attacker required");
+        });
+        match.defender_required_cells.forEach(coord => {
+          roleSets.defenderRequired.add(coordKey(coord));
+          addRole(coord, "defender required");
+        });
+        match.boundary_cells.forEach(coord => {
+          roleSets.boundary.add(coordKey(coord));
+          addRole(coord, "boundary metadata");
+        });
+        match.attacker_superset_cells.forEach(coord => {
+          roleSets.attackerSuperset.add(coordKey(coord));
+          addRole(coord, "attacker superset on template-empty");
+        });
+      });
+
+      return {
+        planeCarrier,
+        planeOrigin,
+        roleSets,
+        perCellRoles,
+      };
+    }
+
+    function boardGeometry(boardSize) {
+      const size = Math.max(16, 30 - Math.max(0, boardSize - 11));
+      const width = Math.sqrt(3) * size;
+      const margin = 70;
+      let maxX = 0;
+      let maxY = 0;
+      const centers = [];
+      for (let row = 0; row < boardSize; row += 1) {
+        for (let col = 0; col < boardSize; col += 1) {
+          const x = margin + width * (col + row / 2) + width / 2;
+          const y = margin + size * 1.5 * row + size;
+          centers.push({ row, col, x, y });
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+        }
+      }
+      return {
+        size,
+        width,
+        height: 2 * size,
+        margin,
+        viewWidth: maxX + width / 2 + margin,
+        viewHeight: maxY + size + margin,
+        centers,
+      };
+    }
+
+    function hexPoints(x, y, size) {
+      const points = [];
+      for (let i = 0; i < 6; i += 1) {
+        const angle = ((60 * i) - 30) * Math.PI / 180;
+        points.push(`${x + size * Math.cos(angle)},${y + size * Math.sin(angle)}`);
+      }
+      return points.join(" ");
+    }
+
+    function renderBoard() {
+      const game = state.game;
+      const position = currentPosition();
+      if (!game || !position) {
+        els.boardSvg.innerHTML = "";
+        return;
+      }
+
+      const geometry = boardGeometry(game.board_size);
+      els.boardSvg.setAttribute("viewBox", `0 0 ${geometry.viewWidth} ${geometry.viewHeight}`);
+
+      const overlay = buildOverlayState(position);
+      const planeColorValue = planeColor(state.selectedPlane);
+      const showPlaneCarrier = els.showPlaneCarrierToggle.checked;
+      const showPlaneOrigin = els.showPlaneOriginToggle.checked;
+      const showRoles = els.showRoleOverlayToggle.checked;
+      const showCoords = els.showCoordsToggle.checked;
+
+      const pieces = position.board_rows.map(row => row.split(""));
+      const fragments = [];
+
+      fragments.push(`
+        <rect x="0" y="0" width="${geometry.viewWidth}" height="${geometry.viewHeight}" fill="transparent"></rect>
+      `);
+
+      for (const cell of geometry.centers) {
+        const occupant = pieces[cell.row][cell.col];
+        const key = `${cell.row},${cell.col}`;
+        const fill = occupant === "b"
+          ? "var(--blue)"
+          : occupant === "r"
+            ? "var(--red)"
+            : "var(--empty)";
+        const stroke = occupant === "e" ? "rgba(102,88,72,0.42)" : "rgba(35,27,22,0.5)";
+        const titleParts = [
+          coordLabel([cell.row, cell.col]),
+          occupant === "b" ? "blue stone" : occupant === "r" ? "red stone" : "empty",
+        ];
+        const roles = overlay.perCellRoles.get(key);
+        if (overlay.planeCarrier.has(key)) titleParts.push(`plane carrier: ${state.selectedPlane}`);
+        if (overlay.planeOrigin.has(key)) titleParts.push(`plane origin: ${state.selectedPlane}`);
+        if (roles && roles.size) titleParts.push(`roles: ${Array.from(roles).join(", ")}`);
+
+        fragments.push(`
+          <g>
+            <polygon points="${hexPoints(cell.x, cell.y, geometry.size)}" fill="${fill}" stroke="${stroke}" stroke-width="1.2">
+              <title>${htmlEscape(titleParts.join(" | "))}</title>
+            </polygon>
+          </g>
+        `);
+
+        if (showPlaneCarrier && overlay.planeCarrier.has(key)) {
+          fragments.push(`
+            <polygon points="${hexPoints(cell.x, cell.y, geometry.size * 0.86)}"
+              fill="${planeColorValue}" opacity="0.25" stroke="${planeColorValue}" stroke-width="1.4"></polygon>
+          `);
+        }
+
+        if (showRoles && overlay.roleSets.carrier.has(key)) {
+          fragments.push(`
+            <polygon points="${hexPoints(cell.x, cell.y, geometry.size * 0.72)}"
+              fill="var(--carrier)" stroke="var(--carrier-stroke)" stroke-width="1"></polygon>
+          `);
+        }
+
+        if (showRoles && overlay.roleSets.boundary.has(key)) {
+          fragments.push(`
+            <polygon points="${hexPoints(cell.x, cell.y, geometry.size * 0.95)}"
+              fill="none" stroke="var(--boundary)" stroke-width="2" stroke-dasharray="4 3"></polygon>
+          `);
+        }
+
+        if (showRoles && overlay.roleSets.attackerRequired.has(key)) {
+          fragments.push(`
+            <circle cx="${cell.x}" cy="${cell.y}" r="${geometry.size * 0.48}"
+              fill="none" stroke="#7e2316" stroke-width="3.3"></circle>
+          `);
+        }
+
+        if (showRoles && overlay.roleSets.defenderRequired.has(key)) {
+          fragments.push(`
+            <circle cx="${cell.x}" cy="${cell.y}" r="${geometry.size * 0.35}"
+              fill="none" stroke="#153f6b" stroke-width="3.1"></circle>
+          `);
+        }
+
+        if (showRoles && overlay.roleSets.attackerSuperset.has(key)) {
+          fragments.push(`
+            <circle cx="${cell.x}" cy="${cell.y}" r="${geometry.size * 0.56}"
+              fill="none" stroke="#f2c14e" stroke-width="2.8" stroke-dasharray="5 4"></circle>
+          `);
+        }
+
+        if ((showRoles && overlay.roleSets.origin.has(key)) || (showPlaneOrigin && overlay.planeOrigin.has(key))) {
+          fragments.push(`
+            <g transform="translate(${cell.x} ${cell.y})">
+              <polygon points="0,-9 3,-3 9,-3 4,1 6,8 0,4 -6,8 -4,1 -9,-3 -3,-3"
+                fill="var(--origin)" stroke="var(--origin-stroke)" stroke-width="1.1"></polygon>
+            </g>
+          `);
+        }
+
+        if (position.last_move && key === coordKey(position.last_move)) {
+          fragments.push(`
+            <circle cx="${cell.x}" cy="${cell.y}" r="${geometry.size * 0.76}"
+              fill="none" stroke="#222222" stroke-width="2.5" opacity="0.75"></circle>
+          `);
+        }
+
+        if (showCoords) {
+          fragments.push(`
+            <text x="${cell.x}" y="${cell.y + 4}" text-anchor="middle"
+              font-size="${Math.max(9, geometry.size * 0.42)}"
+              fill="${occupant === "e" ? "#5f554c" : "rgba(255,255,255,0.92)"}"
+              font-family="SFMono-Regular, Consolas, monospace">${LETTERS[cell.col]}${cell.row + 1}</text>
+          `);
+        }
+      }
+
+      fragments.push(`
+        <text x="${geometry.margin}" y="${geometry.margin - 24}" fill="#8d2e1b" font-size="18" font-weight="700">Red bottom</text>
+        <text x="${geometry.viewWidth - geometry.margin - 110}" y="${geometry.margin - 24}" fill="#1f5884" font-size="18" font-weight="700">Blue right</text>
+      `);
+
+      els.boardSvg.innerHTML = fragments.join("");
+    }
+
+    function movePosition(delta) {
+      if (!state.game) return;
+      const next = Math.max(0, Math.min(state.currentPosition + delta, state.game.positions.length - 1));
+      state.currentPosition = next;
+      renderCurrentPosition();
+    }
+
+    function moveGame(delta) {
+      if (!state.summary || !state.game) return;
+      const next = Math.max(0, Math.min(state.game.game_index + delta, state.summary.games.length - 1));
+      loadGame(next);
+    }
+
+    document.getElementById("listFilesBtn").addEventListener("click", loadFileList);
+    document.getElementById("reloadSummaryBtn").addEventListener("click", () => loadSummary(els.pathInput.value.trim()));
+    document.getElementById("prevGameBtn").addEventListener("click", () => moveGame(-1));
+    document.getElementById("nextGameBtn").addEventListener("click", () => moveGame(1));
+    document.getElementById("prevPositionBtn").addEventListener("click", () => movePosition(-1));
+    document.getElementById("nextPositionBtn").addEventListener("click", () => movePosition(1));
+    els.gameSelect.addEventListener("change", event => loadGame(Number(event.target.value)));
+    els.positionSlider.addEventListener("input", event => {
+      state.currentPosition = Number(event.target.value);
+      renderCurrentPosition();
+    });
+    els.planeSelect.addEventListener("change", event => {
+      state.selectedPlane = event.target.value;
+      renderBoard();
+    });
+    els.matchSelect.addEventListener("change", event => {
+      state.selectedMatch = event.target.value;
+      renderCurrentPosition();
+    });
+    els.showPlaneCarrierToggle.addEventListener("change", renderBoard);
+    els.showPlaneOriginToggle.addEventListener("change", renderBoard);
+    els.showRoleOverlayToggle.addEventListener("change", renderBoard);
+    els.showCoordsToggle.addEventListener("change", renderBoard);
+    els.includeWinnerlessToggle.addEventListener("change", () => {
+      if (state.selectedPath) {
+        loadSummary(state.selectedPath);
+      }
+    });
+
+    window.addEventListener("keydown", event => {
+      if (event.target && ["INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName)) {
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        movePosition(-1);
+      } else if (event.key === "ArrowRight") {
+        movePosition(1);
+      } else if (event.key === "ArrowUp") {
+        moveGame(-1);
+      } else if (event.key === "ArrowDown") {
+        moveGame(1);
+      }
+    });
+
+    function bootstrapFromQuery() {
+      const params = new URLSearchParams(window.location.search);
+      const root = params.get("root");
+      const path = params.get("path");
+      const includeWinnerless = params.get("include_winnerless");
+      if (root) els.rootInput.value = root;
+      if (includeWinnerless === "1" || includeWinnerless === "true") {
+        els.includeWinnerlessToggle.checked = true;
+      }
+      loadFileList().then(() => {
+        if (path) {
+          loadSummary(path);
+        }
+      });
+    }
+
+    bootstrapFromQuery();
+  </script>
+</body>
+</html>
