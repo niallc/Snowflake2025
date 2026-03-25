@@ -41,10 +41,14 @@ AUGMENTATION_FACTOR = 4  # Number of augmentations per unaugmented board (rotati
 MAX_VALIDATION_MEMORY_GB = 9.0
 TRAINING_STREAM_STATE_VERSION = 1
 
-# Compact in-memory representation for pooled training/validation examples:
+# Compact in-memory representation for pooled training/validation examples.
+# The first five fields are stable:
 # (board, policy, value, player_to_move, source_ref)
+# Optional tail fields may be appended later for extra per-position metadata or
+# auxiliary targets without breaking the current trainer, which only reads the
+# leading board/policy/value/player_to_move tuple and source_ref.
 PositionSourceRef = Tuple[int, str, int]  # (dir_idx, shard_filename, example_idx)
-PositionPoolEntry = Tuple[Any, Any, Any, Any, Optional[PositionSourceRef]]
+PositionPoolEntry = Tuple[Any, ...]
 
 
 class ShardLogger:
