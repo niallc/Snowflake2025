@@ -30,6 +30,9 @@ requests>=2.25.0,<3.0.0
 # Optional: wandb for experiment tracking
 # wandb>=0.21.0
 
+# Optional: OpenCV for ladder-template image prefill tooling
+# opencv-python>=4.13.0
+
 # =============================
 # Development / Testing (Optional)
 # =============================

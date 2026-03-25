@@ -61,6 +61,7 @@ from hex_ai.virtual_board import (
 )
 
 DEFAULT_SELFPLAY_CONFIDENCE_TERMINATION_THRESHOLD = 0.85
+NUMPY_SEED_MODULUS = 2**32
 # Policy-only moves use the non-trainable provenance code path.
 POLICY_ONLY_MOVE_PROVENANCE_CODE = MOVE_CODE_CONFIDENCE_TERMINATION
 # Virtual-board prefill moves are externally injected and should not be policy-trainable.
@@ -209,10 +210,10 @@ class SelfPlayEngine:
         return sizes, weights
 
     def _compute_game_seed(self, game_id: Optional[int]) -> int:
-        """Compute deterministic per-game seed used across all game-level sampling."""
+        """Compute deterministic per-game seed in NumPy's accepted uint32 range."""
         if game_id is not None:
-            return int(self.run_seed + int(game_id) * 1000)
-        return int(time.time() * 1000000) % (2**32)
+            return int((self.run_seed + int(game_id) * 1000) % NUMPY_SEED_MODULUS)
+        return int(time.time() * 1000000) % NUMPY_SEED_MODULUS
 
     def _sample_virtual_display_board_size(self, game_id: Optional[int]) -> Optional[int]:
         """Sample optional virtual display board size for one game."""
