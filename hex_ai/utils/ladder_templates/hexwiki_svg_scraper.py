@@ -60,6 +60,33 @@ _HEADLINE_ID_RE = re.compile(
 )
 _SVG_RE = re.compile(r"<svg\b.*?</svg>", flags=re.S)
 _ATTRIBUTE_RE_TEMPLATE = r'\b{attribute}="(?P<value>[^"]*)"'
+_DEFS_RE = re.compile(r"<defs>(?P<body>.*?)</defs>", flags=re.S)
+
+_SHARED_HEXWIKI_STYLE_DEFS = """
+<style>
+  .edgepath  { fill:none; stroke-linecap:round; stroke-linejoin:round; stroke-width:30; }
+  .bodypath  { fill:none; stroke-linecap:round; stroke-linejoin:round; stroke-width:5; stroke:black; }
+  .horizcirc { fill:blue; stroke:black; stroke-width:5; }
+  .vertcirc  { fill:red; stroke:black; stroke-width:5; }
+  .circlabel { fill:white; stroke:none; font-family:Helvetica,sans-serif; font-weight:bold; text-anchor:middle; }
+  .letterlabel { fill:black; stroke:none; font-family:Helvetica,sans-serif; font-weight:normal; text-anchor:middle; }
+  .ilabel { fill:black; stroke:none; font-family:Helvetica,sans-serif; font-weight:normal; text-anchor:middle; }
+  .llabel { fill:black; stroke:none; font-family:Helvetica,sans-serif; font-weight:normal; text-anchor:end; }
+  .rlabel { fill:black; stroke:none; font-family:Helvetica,sans-serif; font-weight:normal; text-anchor:start; }
+</style>
+<clipPath id="clip00"><path d="M0,0h-71h-2.5v-123h2.5h71h71h2.5v123h-2.5z"/></clipPath>
+<clipPath id="clip01"><path d="M0,0h-71h-2.5v-123h2.5h71h71v1l-71,123z"/></clipPath>
+<clipPath id="clip10"><path d="M0,0v1l-213,-123v-1h213h71h2.5v123h-2.5z"/></clipPath>
+<clipPath id="clip11"><path d="M0,0v1l-213,-123v-1h213h71v1l-71,123z"/></clipPath>
+<path id="edge00" class="edgepath" style="clip-path:url(#clip00);" d="M-71,-41l71,-41l71,41"/>
+<path id="edge01" class="edgepath" style="clip-path:url(#clip01);" d="M-71,-41l71,-41l71,41"/>
+<path id="edge10" class="edgepath" style="clip-path:url(#clip10);" d="M-71,-41l71,-41l71,41"/>
+<path id="edge11" class="edgepath" style="clip-path:url(#clip11);" d="M-71,-41l71,-41l71,41"/>
+<filter id="shadow" width="200%" height="200%">
+  <feGaussianBlur stdDeviation="10" in="SourceAlpha"/>
+  <feComponentTransfer><feFuncA type="linear" slope="0.5"/></feComponentTransfer>
+</filter>
+""".strip()
 
 
 DEFAULT_THEORY_OF_LADDER_ESCAPES_SECTIONS: tuple[HexWikiSectionSpec, ...] = (
@@ -107,7 +134,40 @@ def _normalize_svg(svg: str) -> str:
             '<svg xmlns:xlink="http://www.w3.org/1999/xlink"',
             1,
         )
-    return normalized
+    return _inject_shared_hexwiki_defs(normalized)
+
+
+def _inject_shared_hexwiki_defs(svg: str) -> str:
+    needs_shared_defs = (
+        ('class="bodypath"' in svg or 'class="vertcirc"' in svg or 'class="horizcirc"' in svg)
+        or 'xlink:href="#edge00"' in svg
+        or 'xlink:href="#edge01"' in svg
+        or 'xlink:href="#edge10"' in svg
+        or 'xlink:href="#edge11"' in svg
+        or 'url(#shadow)' in svg
+    )
+    has_shared_defs = (
+        ".bodypath" in svg
+        and 'id="edge00"' in svg
+        and 'id="shadow"' in svg
+    )
+    if not needs_shared_defs or has_shared_defs:
+        return svg
+
+    defs_match = _DEFS_RE.search(svg)
+    if defs_match is not None:
+        defs_body = defs_match.group("body")
+        new_defs_body = _SHARED_HEXWIKI_STYLE_DEFS + defs_body
+        return (
+            svg[: defs_match.start("body")]
+            + new_defs_body
+            + svg[defs_match.end("body") :]
+        )
+
+    svg_tag_end = svg.find(">")
+    if svg_tag_end < 0:
+        raise ValueError("SVG fragment is missing an opening tag terminator.")
+    return svg[: svg_tag_end + 1] + f"<defs>{_SHARED_HEXWIKI_STYLE_DEFS}</defs>" + svg[svg_tag_end + 1 :]
 
 
 def extract_hexwiki_svgs(

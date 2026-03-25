@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "kind": "ladder_template_annotation",
+  "coord_system": "row_col_offset",
+  "metadata": {
+    "name": "fourth_row_escape_06",
+    "family": "hexwiki_theory_of_ladder_escapes",
+    "attacker": "red",
+    "target_edge": "red_bottom",
+    "open_left": true,
+    "open_right": false,
+    "notes": "Generated directly from SVG; review in annotator before use. Source page: https://www.hexwiki.net/index.php/Theory_of_ladder_escapes Source section: Examples_3"
+  },
+  "grid": {
+    "rows": 4,
+    "cols": 3,
+    "radius": 21.903171953255423,
+    "origin_x": 28.115204382277312,
+    "origin_y": 30.71786310517529,
+    "grid_opacity": 1,
+    "show_coords": false
+  },
+  "image_overlay": {
+    "image_name": "fourth_row_escape_06.svg",
+    "image_width": 151,
+    "image_height": 160,
+    "image_opacity": 0.8,
+    "image_scale": 1.0,
+    "image_offset_x": 0.0,
+    "image_offset_y": 0.0
+  },
+  "cells": [
+    {
+      "row": 0,
+      "col": 0,
+      "state": "plus"
+    },
+    {
+      "row": 0,
+      "col": 1,
+      "state": "red"
+    },
+    {
+      "row": 0,
+      "col": 2,
+      "state": "red"
+    },
+    {
+      "row": 1,
+      "col": 0,
+      "state": "plus"
+    },
+    {
+      "row": 1,
+      "col": 1,
+      "state": "empty"
+    },
+    {
+      "row": 1,
+      "col": 2,
+      "state": "empty"
+    },
+    {
+      "row": 2,
+      "col": 0,
+      "state": "plus"
+    },
+    {
+      "row": 2,
+      "col": 1,
+      "state": "empty"
+    },
+    {
+      "row": 3,
+      "col": 0,
+      "state": "plus"
+    },
+    {
+      "row": 3,
+      "col": 1,
+      "state": "empty"
+    }
+  ]
+}

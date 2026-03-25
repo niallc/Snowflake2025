@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from hex_ai.hexwiki_svg_scraper import (
+from hex_ai.utils.ladder_templates.hexwiki_svg_scraper import (
     HexWikiSectionSpec,
     extract_hexwiki_svgs,
     find_hexwiki_headings,
@@ -18,11 +18,11 @@ _SAMPLE_HTML = """
     <p>Intro text</p>
     <h3><span class="mw-headline" id="Examples">Examples</span></h3>
     <p>Examples text</p>
-    <div><svg width="100px" height="80px" viewBox="0 0 100 80"><defs></defs><use xlink:href="#hexes0"/></svg></div>
+    <div><svg width="100px" height="80px" viewBox="0 0 100 80"><defs><path id="hexes0" class="bodypath" d="M0,0z"/></defs><g><use xlink:href="#hexes0" filter="url(#shadow)"/><use xlink:href="#edge00" style="stroke:red"/></g><circle class="vertcirc" cx="10" cy="10" r="5"/></svg></div>
     <h4><span class="mw-headline" id="Nested">Nested</span></h4>
-    <div><svg width="120px" height="90px" viewBox="0 0 120 90"><defs></defs><circle class="vertcirc" cx="10" cy="10" r="5"/></svg></div>
+    <div><svg width="120px" height="90px" viewBox="0 0 120 90"><defs><path id="hexes1" class="bodypath" d="M0,0z"/></defs><g><use xlink:href="#hexes1" filter="url(#shadow)"/></g><circle class="vertcirc" cx="10" cy="10" r="5"/></svg></div>
     <h3><span class="mw-headline" id="Examples_2">Examples 2</span></h3>
-    <div><svg width="140px" height="110px" viewBox="0 0 140 110"><defs></defs><path id="edge00"/></svg></div>
+    <div><svg width="140px" height="110px" viewBox="0 0 140 110"><defs><path id="hexes2" class="bodypath" d="M0,0z"/></defs><g><use xlink:href="#hexes2" filter="url(#shadow)"/><use xlink:href="#edge00" style="stroke:red"/></g></svg></div>
   </body>
 </html>
 """
@@ -54,6 +54,9 @@ def test_extract_hexwiki_svgs_uses_same_or_higher_heading_as_boundary():
     assert extracted[0].height == "80px"
     assert extracted[0].view_box == "0 0 100 80"
     assert 'xmlns:xlink="http://www.w3.org/1999/xlink"' in extracted[0].svg
+    assert ".bodypath" in extracted[0].svg
+    assert 'id="edge00"' in extracted[0].svg
+    assert 'id="shadow"' in extracted[0].svg
 
 
 def test_extract_hexwiki_svgs_raises_for_missing_anchor():

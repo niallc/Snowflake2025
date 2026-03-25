@@ -1,7 +1,7 @@
 import numpy as np
 
 from hex_ai.enums import Piece, Player
-from hex_ai.ladder_templates import (
+from hex_ai.utils.ladder_templates.core import (
     ladder_template_annotation_from_dict,
     materialize_ladder_template,
 )

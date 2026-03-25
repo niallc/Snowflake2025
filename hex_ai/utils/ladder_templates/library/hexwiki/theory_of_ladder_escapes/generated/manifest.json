@@ -1,0 +1,418 @@
+{
+  "count": 59,
+  "items": [
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fifth_row_escape_01.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fifth_row_escape_01.json",
+      "cells": 10,
+      "grid_rows": 5,
+      "grid_cols": 2
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fifth_row_escape_02.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fifth_row_escape_02.json",
+      "cells": 15,
+      "grid_rows": 5,
+      "grid_cols": 3
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fifth_row_escape_03.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fifth_row_escape_03.json",
+      "cells": 13,
+      "grid_rows": 5,
+      "grid_cols": 3
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fifth_row_escape_04.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fifth_row_escape_04.json",
+      "cells": 13,
+      "grid_rows": 5,
+      "grid_cols": 3
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fifth_row_escape_05.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fifth_row_escape_05.json",
+      "cells": 20,
+      "grid_rows": 5,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fifth_row_escape_06.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fifth_row_escape_06.json",
+      "cells": 13,
+      "grid_rows": 5,
+      "grid_cols": 3
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fifth_row_escape_07.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fifth_row_escape_07.json",
+      "cells": 17,
+      "grid_rows": 5,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fifth_row_escape_08.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fifth_row_escape_08.json",
+      "cells": 24,
+      "grid_rows": 6,
+      "grid_cols": 5
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fourth_row_escape_01.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fourth_row_escape_01.json",
+      "cells": 8,
+      "grid_rows": 4,
+      "grid_cols": 2
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fourth_row_escape_02.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fourth_row_escape_02.json",
+      "cells": 11,
+      "grid_rows": 4,
+      "grid_cols": 3
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fourth_row_escape_03.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fourth_row_escape_03.json",
+      "cells": 10,
+      "grid_rows": 4,
+      "grid_cols": 3
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fourth_row_escape_04.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fourth_row_escape_04.json",
+      "cells": 18,
+      "grid_rows": 5,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fourth_row_escape_05.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fourth_row_escape_05.json",
+      "cells": 26,
+      "grid_rows": 5,
+      "grid_cols": 6
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fourth_row_escape_06.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fourth_row_escape_06.json",
+      "cells": 10,
+      "grid_rows": 4,
+      "grid_cols": 3
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fourth_row_escape_07.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fourth_row_escape_07.json",
+      "cells": 10,
+      "grid_rows": 4,
+      "grid_cols": 3
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fourth_row_escape_08.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fourth_row_escape_08.json",
+      "cells": 14,
+      "grid_rows": 5,
+      "grid_cols": 3
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fourth_row_escape_09.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fourth_row_escape_09.json",
+      "cells": 14,
+      "grid_rows": 5,
+      "grid_cols": 3
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fourth_row_escape_10.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fourth_row_escape_10.json",
+      "cells": 5,
+      "grid_rows": 5,
+      "grid_cols": 1
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fourth_row_escape_11.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fourth_row_escape_11.json",
+      "cells": 18,
+      "grid_rows": 5,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fourth_row_escape_12.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fourth_row_escape_12.json",
+      "cells": 18,
+      "grid_rows": 5,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fourth_row_escape_13.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fourth_row_escape_13.json",
+      "cells": 26,
+      "grid_rows": 6,
+      "grid_cols": 5
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fourth_row_escape_14.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fourth_row_escape_14.json",
+      "cells": 26,
+      "grid_rows": 6,
+      "grid_cols": 5
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/fourth_row_escape_15.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/fourth_row_escape_15.json",
+      "cells": 31,
+      "grid_rows": 6,
+      "grid_cols": 6
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/second_row_escape_01.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/second_row_escape_01.json",
+      "cells": 4,
+      "grid_rows": 2,
+      "grid_cols": 2
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/second_row_escape_02.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/second_row_escape_02.json",
+      "cells": 4,
+      "grid_rows": 2,
+      "grid_cols": 2
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/second_row_escape_03.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/second_row_escape_03.json",
+      "cells": 8,
+      "grid_rows": 3,
+      "grid_cols": 3
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/second_row_escape_04.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/second_row_escape_04.json",
+      "cells": 8,
+      "grid_rows": 3,
+      "grid_cols": 3
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/second_row_escape_05.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/second_row_escape_05.json",
+      "cells": 11,
+      "grid_rows": 4,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/second_row_escape_06.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/second_row_escape_06.json",
+      "cells": 11,
+      "grid_rows": 4,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/second_row_escape_07.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/second_row_escape_07.json",
+      "cells": 19,
+      "grid_rows": 4,
+      "grid_cols": 6
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/second_row_escape_08.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/second_row_escape_08.json",
+      "cells": 19,
+      "grid_rows": 4,
+      "grid_cols": 6
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/second_row_escape_09.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/second_row_escape_09.json",
+      "cells": 15,
+      "grid_rows": 5,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/second_row_escape_10.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/second_row_escape_10.json",
+      "cells": 38,
+      "grid_rows": 5,
+      "grid_cols": 10
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/second_row_escape_11.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/second_row_escape_11.json",
+      "cells": 21,
+      "grid_rows": 5,
+      "grid_cols": 5
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/second_row_escape_12.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/second_row_escape_12.json",
+      "cells": 38,
+      "grid_rows": 5,
+      "grid_cols": 10
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/second_row_escape_13.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/second_row_escape_13.json",
+      "cells": 4,
+      "grid_rows": 2,
+      "grid_cols": 3
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/second_row_escape_14.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/second_row_escape_14.json",
+      "cells": 8,
+      "grid_rows": 3,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/second_row_escape_15.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/second_row_escape_15.json",
+      "cells": 6,
+      "grid_rows": 4,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_01.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_01.json",
+      "cells": 6,
+      "grid_rows": 3,
+      "grid_cols": 2
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_02.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_02.json",
+      "cells": 9,
+      "grid_rows": 3,
+      "grid_cols": 3
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_03.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_03.json",
+      "cells": 5,
+      "grid_rows": 3,
+      "grid_cols": 3
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_04.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_04.json",
+      "cells": 7,
+      "grid_rows": 4,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_05.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_05.json",
+      "cells": 16,
+      "grid_rows": 5,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_06.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_06.json",
+      "cells": 30,
+      "grid_rows": 5,
+      "grid_cols": 7
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_07.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_07.json",
+      "cells": 23,
+      "grid_rows": 5,
+      "grid_cols": 6
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_08.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_08.json",
+      "cells": 13,
+      "grid_rows": 4,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_09.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_09.json",
+      "cells": 11,
+      "grid_rows": 4,
+      "grid_cols": 3
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_10.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_10.json",
+      "cells": 29,
+      "grid_rows": 5,
+      "grid_cols": 7
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_11.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_11.json",
+      "cells": 15,
+      "grid_rows": 4,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_12.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_12.json",
+      "cells": 15,
+      "grid_rows": 4,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_13.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_13.json",
+      "cells": 15,
+      "grid_rows": 4,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_14.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_14.json",
+      "cells": 8,
+      "grid_rows": 4,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_15.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_15.json",
+      "cells": 6,
+      "grid_rows": 4,
+      "grid_cols": 3
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_16.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_16.json",
+      "cells": 18,
+      "grid_rows": 5,
+      "grid_cols": 5
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_17.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_17.json",
+      "cells": 34,
+      "grid_rows": 5,
+      "grid_cols": 8
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_18.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_18.json",
+      "cells": 19,
+      "grid_rows": 5,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_19.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_19.json",
+      "cells": 17,
+      "grid_rows": 5,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_20.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_20.json",
+      "cells": 21,
+      "grid_rows": 6,
+      "grid_cols": 4
+    },
+    {
+      "input_svg": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/third_row_escape_21.svg",
+      "output_json": "/Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/svg_json/third_row_escape_21.json",
+      "cells": 21,
+      "grid_rows": 6,
+      "grid_cols": 4
+    }
+  ]
+}

@@ -12,20 +12,33 @@ The goal is to turn ladder-escape diagrams and related template fragments into r
 - evaluated by Snowflake,
 - and eventually used for auxiliary training data or template libraries.
 
-## Current pieces
+## Current package layout
+
+The ladder-template Python tooling now lives under:
+
+- `hex_ai/utils/ladder_templates/`
+
+Key pieces:
 
 - `docs/ladder_template_annotator.html`
   - Manual / semi-automatic review UI.
   - Loads an image, overlays a hex grid, and exports annotation JSON.
-- `scripts/prefill_ladder_template_from_image.py`
-  - First-pass OpenCV prefill.
-  - Detects likely cells in a diagram image and emits annotator-compatible JSON.
-- `hex_ai/ladder_templates.py`
-  - Loads and validates annotation JSON.
-  - Materializes template cells onto a concrete Snowflake board.
-- `scripts/preview_ladder_template.py`
+- `hex_ai/utils/ladder_templates/core.py`
+  - Loads, validates, and materializes annotation JSON.
+- `hex_ai/utils/ladder_templates/prefill_geometry.py`
+  - Shared offset-grid inference and annotation-payload builder.
+- `hex_ai/utils/ladder_templates/prefill_from_image.py`
+  - OpenCV prefill from raster images.
+- `hex_ai/utils/ladder_templates/hexwiki_svg_scraper.py`
+  - Extracts standalone SVG diagrams from HexWiki sections.
+- `hex_ai/utils/ladder_templates/scrape_hexwiki_example_svgs.py`
+  - CLI for HexWiki section scraping.
+- `hex_ai/utils/ladder_templates/svg_prefill.py`
+  - Direct `SVG -> annotation JSON` converter.
+- `hex_ai/utils/ladder_templates/prefill_from_svg.py`
+  - Batch CLI for converting SVG files to annotation JSON.
+- `hex_ai/utils/ladder_templates/preview.py`
   - CLI preview for a reviewed annotation.
-  - Prints an ASCII board plus boundary/stone metadata.
 
 ## Annotation JSON model
 
@@ -61,11 +74,43 @@ cd /Users/niallHome/Documents/programming/Snowflake2025
 source hex_ai_env/bin/activate
 ```
 
-OpenCV is optional and is only needed for the image-prefill script:
+OpenCV is optional and is only needed for the raster-image prefill path:
 
 ```bash
 pip install opencv-python
 ```
+
+## Current pilot outputs
+
+The current committed library lives under:
+
+- `hex_ai/utils/ladder_templates/library/hexwiki/theory_of_ladder_escapes/generated/`
+  - Direct SVG-derived annotation JSON files committed as the current imported corpus.
+- `hex_ai/utils/ladder_templates/library/hexwiki/theory_of_ladder_escapes/reviewed/`
+  - Reserved for manually reviewed canonical files promoted from `generated/`.
+
+Scratch and regeneration artifacts remain under:
+
+- `temp/ladder_templates/hexwiki_pilot/scraped_images/`
+  - Standalone SVGs scraped from the `Theory_of_ladder_escapes` example sections.
+  - Includes:
+    - `index.html`
+    - `manifest.json`
+- `temp/ladder_templates/hexwiki_pilot/svg_json/`
+  - Annotation JSON generated directly from those SVGs.
+  - Includes:
+    - one JSON file per scraped SVG
+    - `manifest.json`
+- `temp/ladder_templates/hexwiki_pilot/prefill/`
+  - Earlier OpenCV-based raster prefills.
+- `temp/ladder_templates/hexwiki_pilot/reviewed/`
+  - Manually reviewed JSON samples.
+
+At the time of writing, the HexWiki scrape produced:
+
+- 59 standalone SVG files in `scraped_images/`
+- 59 annotation JSON files in `svg_json/`
+- 59 committed generated JSON files in `hex_ai/utils/ladder_templates/library/hexwiki/theory_of_ladder_escapes/generated/`
 
 ## Main workflows
 
@@ -79,7 +124,7 @@ open /Users/niallHome/Documents/programming/Snowflake2025/docs/ladder_template_a
 
 Practical process:
 
-1. Load a source image.
+1. Load a source image or SVG.
 2. If the image obscures the board, either:
    - adjust `Image X` / `Image Y`, or
    - click `Place below board`.
@@ -90,16 +135,16 @@ Practical process:
 Use this for:
 
 - reviewing wiki diagrams by hand,
-- fixing OpenCV prefills,
+- fixing prefills,
 - creating canonical template JSON for a library.
 
-### 2. OpenCV prefill from an image
+### 2. OpenCV prefill from a raster image
 
 Generate a first-pass annotation JSON from a diagram image:
 
 ```bash
 source hex_ai_env/bin/activate
-python scripts/prefill_ladder_template_from_image.py \
+python -m hex_ai.utils.ladder_templates.prefill_from_image \
   /path/to/wiki_diagram.png \
   --output /tmp/wiki_diagram_prefill.json \
   --family hexwiki_prefill \
@@ -108,7 +153,7 @@ python scripts/prefill_ladder_template_from_image.py \
   --debug-image /tmp/wiki_diagram_debug.png
 ```
 
-What this currently does:
+What this does:
 
 - detects likely hex cells,
 - classifies simple cell contents,
@@ -122,15 +167,69 @@ Expected use:
 3. Review and correct mistakes.
 4. Save the reviewed JSON as the canonical template.
 
-This is a prefill only. It is not trusted ground truth.
+This is still a prefill only. It is not trusted ground truth.
 
-### 3. Preview a reviewed template on a Snowflake board
+### 3. Scrape standalone HexWiki SVG diagrams
+
+For HexWiki pages that embed diagrams as inline SVG, extract them directly:
+
+```bash
+source hex_ai_env/bin/activate
+python -m hex_ai.utils.ladder_templates.scrape_hexwiki_example_svgs \
+  --output-dir temp/ladder_templates/hexwiki_pilot/scraped_images
+```
+
+This:
+
+- fetches the page,
+- slices out the requested section anchors,
+- writes standalone SVG files,
+- writes a scrape manifest,
+- and creates a lightweight `index.html` review page.
+
+Review the current pilot scrape in a browser:
+
+```bash
+open /Users/niallHome/Documents/programming/Snowflake2025/temp/ladder_templates/hexwiki_pilot/scraped_images/index.html
+```
+
+### 4. Convert scraped SVGs directly to annotation JSON
+
+The current HexWiki diagrams are better handled as vector graphics than as raster screenshots.
+
+Convert a directory of scraped SVGs directly to JSON:
+
+```bash
+source hex_ai_env/bin/activate
+python -m hex_ai.utils.ladder_templates.prefill_from_svg \
+  temp/ladder_templates/hexwiki_pilot/scraped_images \
+  --output-dir temp/ladder_templates/hexwiki_pilot/svg_json
+```
+
+What this does:
+
+- reads the hex geometry directly from the SVG path data,
+- detects `plus` markers from the SVG line paths,
+- detects `red` / `blue` stones from SVG circles,
+- infers the local offset-grid,
+- and writes annotator-compatible JSON plus a batch manifest.
+
+This is currently the preferred path for the `Theory_of_ladder_escapes` pilot.
+
+To refresh the committed generated corpus after regeneration, copy the reviewed batch into:
+
+```bash
+cp temp/ladder_templates/hexwiki_pilot/svg_json/*.json \
+  /Users/niallHome/Documents/programming/Snowflake2025/hex_ai/utils/ladder_templates/library/hexwiki/theory_of_ladder_escapes/generated/
+```
+
+### 5. Preview a reviewed template on a Snowflake board
 
 Preview a template after review:
 
 ```bash
 source hex_ai_env/bin/activate
-python scripts/preview_ladder_template.py \
+python -m hex_ai.utils.ladder_templates.preview \
   /path/to/reviewed_template.json \
   --board-size 13 \
   --anchor-row 2 \
@@ -158,9 +257,11 @@ Use this for:
 Process:
 
 1. Collect relevant ladder diagrams.
-2. Prefill with OpenCV where useful.
-3. Review in the annotator.
-4. Save reviewed JSON files in a dedicated template directory.
+2. Prefer direct SVG conversion when the source page exposes vector diagrams.
+3. Fall back to raster-image prefill when needed.
+4. Review in the annotator.
+5. Commit bulk-import results into `library/.../generated/`.
+6. Promote hand-checked files into `library/.../reviewed/`.
 
 Outcome:
 
@@ -170,7 +271,7 @@ Outcome:
 
 Process:
 
-1. Load the template JSON with `hex_ai.ladder_templates`.
+1. Load the template JSON with `hex_ai.utils.ladder_templates.core`.
 2. Materialize it at a chosen anchor on a 13x13 board.
 3. Create one or more `HexGameState` objects from it.
 
@@ -178,18 +279,19 @@ Outcome:
 
 - reproducible board positions suitable for MCTS or other analysis.
 
-### Build an image-to-review pipeline
+### Build a source-page-to-review pipeline
 
 Process:
 
-1. Start from stored wiki images.
-2. Run `prefill_ladder_template_from_image.py`.
-3. Save JSON and optional debug overlay.
-4. Review in the annotator.
+1. Scrape SVG diagrams from a source page where possible.
+2. Convert the standalone SVGs directly to annotation JSON.
+3. Review the JSON in the annotator.
+4. Commit bulk-import JSON into `library/.../generated/`.
+5. Promote canonical reviewed JSON into `library/.../reviewed/`.
 
 Outcome:
 
-- a scalable path from raw diagrams to reviewed structured data.
+- a scalable path from source page to reviewed structured data.
 
 ### Prepare for later solver or MCTS verification
 
@@ -209,13 +311,14 @@ Outcome:
 ## Current limitations
 
 - The annotator is a local standalone HTML file, not yet integrated into the main Snowflake web app.
-- The OpenCV prefill is heuristic and should be treated as a draft generator.
+- The OpenCV raster prefill is heuristic and should be treated as a draft generator.
+- The direct SVG path currently targets the structure used by the current HexWiki diagrams; it is not yet a generic SVG diagram parser.
 - `plus` / `minus` boundary cells are preserved as metadata; they are not yet compiled into richer ladder semantics.
 - There is not yet a full template-to-search pipeline that automatically derives all concrete verification positions for Snowflake.
 
 ## Suggested next steps
 
-- Add a small corpus directory for reviewed ladder-template JSON files.
-- Add scripts to harvest or catalogue ladder images from source pages.
-- Add a downstream evaluator that takes a reviewed template and generates concrete MCTS verification jobs.
+- Review the committed `generated/` corpus and start promoting checked files into `reviewed/`.
+- Improve preview placement so bottom-edge templates default closer to the target edge.
 - Extend the template compiler with stronger semantics for open boundaries, edge attachment, and ladder-family-specific instantiation rules.
+- Add a downstream evaluator that takes a reviewed template and generates concrete MCTS verification jobs.

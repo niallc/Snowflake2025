@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "kind": "ladder_template_annotation",
+  "coord_system": "row_col_offset",
+  "metadata": {
+    "name": "third_row_escape_18",
+    "family": "hexwiki_theory_of_ladder_escapes",
+    "attacker": "red",
+    "target_edge": "red_bottom",
+    "open_left": true,
+    "open_right": false,
+    "notes": "Generated directly from SVG; review in annotator before use. Source page: https://www.hexwiki.net/index.php/Theory_of_ladder_escapes Source section: Examples_2"
+  },
+  "grid": {
+    "rows": 5,
+    "cols": 4,
+    "radius": 21.9196675900277,
+    "origin_x": 9.070887472096658,
+    "origin_y": 30.7409972299169,
+    "grid_opacity": 1,
+    "show_coords": false
+  },
+  "image_overlay": {
+    "image_name": "third_row_escape_18.svg",
+    "image_width": 227,
+    "image_height": 193,
+    "image_opacity": 0.8,
+    "image_scale": 1.0,
+    "image_offset_x": 0.0,
+    "image_offset_y": 0.0
+  },
+  "cells": [
+    {
+      "row": 0,
+      "col": 1,
+      "state": "empty"
+    },
+    {
+      "row": 0,
+      "col": 2,
+      "state": "red"
+    },
+    {
+      "row": 0,
+      "col": 3,
+      "state": "red"
+    },
+    {
+      "row": 1,
+      "col": 0,
+      "state": "empty"
+    },
+    {
+      "row": 1,
+      "col": 1,
+      "state": "empty"
+    },
+    {
+      "row": 1,
+      "col": 2,
+      "state": "empty"
+    },
+    {
+      "row": 1,
+      "col": 3,
+      "state": "empty"
+    },
+    {
+      "row": 2,
+      "col": 0,
+      "state": "plus"
+    },
+    {
+      "row": 2,
+      "col": 1,
+      "state": "empty"
+    },
+    {
+      "row": 2,
+      "col": 2,
+      "state": "empty"
+    },
+    {
+      "row": 2,
+      "col": 3,
+      "state": "empty"
+    },
+    {
+      "row": 3,
+      "col": 0,
+      "state": "plus"
+    },
+    {
+      "row": 3,
+      "col": 1,
+      "state": "empty"
+    },
+    {
+      "row": 3,
+      "col": 2,
+      "state": "empty"
+    },
+    {
+      "row": 3,
+      "col": 3,
+      "state": "empty"
+    },
+    {
+      "row": 4,
+      "col": 0,
+      "state": "plus"
+    },
+    {
+      "row": 4,
+      "col": 1,
+      "state": "empty"
+    },
+    {
+      "row": 4,
+      "col": 2,
+      "state": "empty"
+    },
+    {
+      "row": 4,
+      "col": 3,
+      "state": "empty"
+    }
+  ]
+}

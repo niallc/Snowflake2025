@@ -8,7 +8,7 @@ from pathlib import Path
 
 import requests
 
-from hex_ai.hexwiki_svg_scraper import (
+from hex_ai.utils.ladder_templates.hexwiki_svg_scraper import (
     DEFAULT_THEORY_OF_LADDER_ESCAPES_SECTIONS,
     HexWikiSectionSpec,
     extract_hexwiki_svgs,

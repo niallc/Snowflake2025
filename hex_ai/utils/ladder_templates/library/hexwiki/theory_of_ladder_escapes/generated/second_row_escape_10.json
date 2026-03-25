@@ -1,0 +1,224 @@
+{
+  "schema_version": 1,
+  "kind": "ladder_template_annotation",
+  "coord_system": "row_col_offset",
+  "metadata": {
+    "name": "second_row_escape_10",
+    "family": "hexwiki_theory_of_ladder_escapes",
+    "attacker": "red",
+    "target_edge": "red_bottom",
+    "open_left": true,
+    "open_right": false,
+    "notes": "Generated directly from SVG; review in annotator before use. Source page: https://www.hexwiki.net/index.php/Theory_of_ladder_escapes Source section: Examples"
+  },
+  "grid": {
+    "rows": 5,
+    "cols": 10,
+    "radius": 21.9196675900277,
+    "origin_x": -28.803574834787327,
+    "origin_y": 30.7409972299169,
+    "grid_opacity": 1,
+    "show_coords": false
+  },
+  "image_overlay": {
+    "image_name": "second_row_escape_10.svg",
+    "image_width": 417,
+    "image_height": 193,
+    "image_opacity": 0.8,
+    "image_scale": 1.0,
+    "image_offset_x": 0.0,
+    "image_offset_y": 0.0
+  },
+  "cells": [
+    {
+      "row": 0,
+      "col": 5,
+      "state": "empty"
+    },
+    {
+      "row": 0,
+      "col": 6,
+      "state": "red"
+    },
+    {
+      "row": 0,
+      "col": 7,
+      "state": "empty"
+    },
+    {
+      "row": 1,
+      "col": 3,
+      "state": "empty"
+    },
+    {
+      "row": 1,
+      "col": 4,
+      "state": "empty"
+    },
+    {
+      "row": 1,
+      "col": 5,
+      "state": "empty"
+    },
+    {
+      "row": 1,
+      "col": 6,
+      "state": "empty"
+    },
+    {
+      "row": 1,
+      "col": 7,
+      "state": "empty"
+    },
+    {
+      "row": 1,
+      "col": 8,
+      "state": "empty"
+    },
+    {
+      "row": 2,
+      "col": 1,
+      "state": "empty"
+    },
+    {
+      "row": 2,
+      "col": 2,
+      "state": "empty"
+    },
+    {
+      "row": 2,
+      "col": 3,
+      "state": "empty"
+    },
+    {
+      "row": 2,
+      "col": 4,
+      "state": "empty"
+    },
+    {
+      "row": 2,
+      "col": 5,
+      "state": "empty"
+    },
+    {
+      "row": 2,
+      "col": 6,
+      "state": "empty"
+    },
+    {
+      "row": 2,
+      "col": 7,
+      "state": "empty"
+    },
+    {
+      "row": 2,
+      "col": 8,
+      "state": "empty"
+    },
+    {
+      "row": 2,
+      "col": 9,
+      "state": "empty"
+    },
+    {
+      "row": 3,
+      "col": 0,
+      "state": "plus"
+    },
+    {
+      "row": 3,
+      "col": 1,
+      "state": "empty"
+    },
+    {
+      "row": 3,
+      "col": 2,
+      "state": "empty"
+    },
+    {
+      "row": 3,
+      "col": 3,
+      "state": "empty"
+    },
+    {
+      "row": 3,
+      "col": 4,
+      "state": "empty"
+    },
+    {
+      "row": 3,
+      "col": 5,
+      "state": "empty"
+    },
+    {
+      "row": 3,
+      "col": 6,
+      "state": "empty"
+    },
+    {
+      "row": 3,
+      "col": 7,
+      "state": "empty"
+    },
+    {
+      "row": 3,
+      "col": 8,
+      "state": "empty"
+    },
+    {
+      "row": 3,
+      "col": 9,
+      "state": "empty"
+    },
+    {
+      "row": 4,
+      "col": 0,
+      "state": "plus"
+    },
+    {
+      "row": 4,
+      "col": 1,
+      "state": "empty"
+    },
+    {
+      "row": 4,
+      "col": 2,
+      "state": "empty"
+    },
+    {
+      "row": 4,
+      "col": 3,
+      "state": "empty"
+    },
+    {
+      "row": 4,
+      "col": 4,
+      "state": "empty"
+    },
+    {
+      "row": 4,
+      "col": 5,
+      "state": "empty"
+    },
+    {
+      "row": 4,
+      "col": 6,
+      "state": "empty"
+    },
+    {
+      "row": 4,
+      "col": 7,
+      "state": "empty"
+    },
+    {
+      "row": 4,
+      "col": 8,
+      "state": "empty"
+    },
+    {
+      "row": 4,
+      "col": 9,
+      "state": "empty"
+    }
+  ]
+}

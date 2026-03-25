@@ -9,7 +9,7 @@ from pathlib import Path
 
 from hex_ai.config import BOARD_SIZE
 from hex_ai.inference.board_display import display_hex_board
-from hex_ai.ladder_templates import (
+from hex_ai.utils.ladder_templates.core import (
     load_ladder_template_annotation,
     materialize_ladder_template,
 )

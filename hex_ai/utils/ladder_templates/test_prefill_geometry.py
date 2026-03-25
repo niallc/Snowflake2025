@@ -1,4 +1,4 @@
-from hex_ai.ladder_template_prefill import (
+from hex_ai.utils.ladder_templates.prefill_geometry import (
     DetectedImageCell,
     build_prefill_annotation_payload,
     infer_offset_grid,

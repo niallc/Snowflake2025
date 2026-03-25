@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "kind": "ladder_template_annotation",
+  "coord_system": "row_col_offset",
+  "metadata": {
+    "name": "third_row_escape_21",
+    "family": "hexwiki_theory_of_ladder_escapes",
+    "attacker": "red",
+    "target_edge": "red_bottom",
+    "open_left": true,
+    "open_right": false,
+    "notes": "Generated directly from SVG; review in annotator before use. Source page: https://www.hexwiki.net/index.php/Theory_of_ladder_escapes Source section: Examples_2"
+  },
+  "grid": {
+    "rows": 6,
+    "cols": 4,
+    "radius": 21.93136094674556,
+    "origin_x": -9.972861967216843,
+    "origin_y": 30.757396449704146,
+    "grid_opacity": 1,
+    "show_coords": false
+  },
+  "image_overlay": {
+    "image_name": "third_row_escape_21.svg",
+    "image_width": 227,
+    "image_height": 226,
+    "image_opacity": 0.8,
+    "image_scale": 1.0,
+    "image_offset_x": 0.0,
+    "image_offset_y": 0.0
+  },
+  "cells": [
+    {
+      "row": 0,
+      "col": 2,
+      "state": "red"
+    },
+    {
+      "row": 0,
+      "col": 3,
+      "state": "empty"
+    },
+    {
+      "row": 1,
+      "col": 1,
+      "state": "red"
+    },
+    {
+      "row": 1,
+      "col": 2,
+      "state": "empty"
+    },
+    {
+      "row": 1,
+      "col": 3,
+      "state": "empty"
+    },
+    {
+      "row": 2,
+      "col": 0,
+      "state": "empty"
+    },
+    {
+      "row": 2,
+      "col": 1,
+      "state": "empty"
+    },
+    {
+      "row": 2,
+      "col": 2,
+      "state": "empty"
+    },
+    {
+      "row": 2,
+      "col": 3,
+      "state": "empty"
+    },
+    {
+      "row": 3,
+      "col": 0,
+      "state": "plus"
+    },
+    {
+      "row": 3,
+      "col": 1,
+      "state": "empty"
+    },
+    {
+      "row": 3,
+      "col": 2,
+      "state": "empty"
+    },
+    {
+      "row": 3,
+      "col": 3,
+      "state": "empty"
+    },
+    {
+      "row": 4,
+      "col": 0,
+      "state": "plus"
+    },
+    {
+      "row": 4,
+      "col": 1,
+      "state": "empty"
+    },
+    {
+      "row": 4,
+      "col": 2,
+      "state": "empty"
+    },
+    {
+      "row": 4,
+      "col": 3,
+      "state": "empty"
+    },
+    {
+      "row": 5,
+      "col": 0,
+      "state": "plus"
+    },
+    {
+      "row": 5,
+      "col": 1,
+      "state": "empty"
+    },
+    {
+      "row": 5,
+      "col": 2,
+      "state": "empty"
+    },
+    {
+      "row": 5,
+      "col": 3,
+      "state": "empty"
+    }
+  ]
+}
